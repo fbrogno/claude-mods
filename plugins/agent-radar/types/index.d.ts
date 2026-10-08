@@ -21,6 +21,7 @@ export type SitzungsStand = {
   arbeitet: boolean
   /** Beginn des laufenden Turns bzw. Ende des letzten. */
   seit: number
+  /** Kontextgröße in Tokens (nicht Prozent — bei 1M-Fenstern sagt Prozent zu wenig). */
   kontext: number | null
   letzteAntwort: number | null
   agents: Array<{ modell: string; beschreibung: string; gestartet: number; tools: number }>
@@ -37,6 +38,7 @@ declare module 'claude-code' {
       jetzt: number
       sitzungen: SitzungsStand[]
       eigeneId: string
+      kontextTokens: number | null
     }
   }
 }

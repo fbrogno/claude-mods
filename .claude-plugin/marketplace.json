@@ -1,17 +1,26 @@
 {
   "name": "claude-mods",
-  "owner": { "name": "Fabio Brogno" },
-  "metadata": { "description": "Modpack: Mods für Claude Code (ab 2.1.289), die die Arbeit im Terminal schneller und token-sparsamer machen." },
+  "owner": {
+    "name": "Fabio Brogno"
+  },
+  "metadata": {
+    "description": "Modpack: Mods für Claude Code (ab 2.1.289), die die Arbeit im Terminal schneller und token-sparsamer machen."
+  },
   "plugins": [
     {
       "name": "agent-radar",
       "source": "./plugins/agent-radar",
-      "description": "Alle Sitzungen und Subagents im Blick (Status, Modell, Kontext, Tokens), Cache-Warnung, Explore-Agents auf Haiku."
+      "description": "Alle Sitzungen und Subagents im Blick, Kaltstart-Wächter gegen teure Cache-Neuaufbauten, Modellwahl-Pflicht für Subagents, Such-Agents auf Haiku."
     },
     {
       "name": "brain-mods",
       "source": "./plugins/brain-mods",
-      "description": "Kollisionsschutz für parallele Sitzungen, Kontext-Anzeige mit „Stand sichern“, Brain-Band."
+      "description": "Kollisionsschutz für parallele Sitzungen, Kontext-Anzeige mit festen Token-Schwellen und „Stand sichern“, Brain-Band."
+    },
+    {
+      "name": "wachhalter",
+      "source": "./plugins/wachhalter",
+      "description": "/wach hält den Mac per caffeinate wach — ohne Modellaufruf, ohne Tokens."
     }
   ]
 }

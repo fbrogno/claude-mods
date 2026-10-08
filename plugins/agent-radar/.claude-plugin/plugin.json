@@ -1,9 +1,15 @@
 {
   "name": "agent-radar",
-  "version": "0.2.0",
-  "description": "Alle Claude-Code-Sitzungen und Subagents auf einen Blick (Status, Modell, Kontext, Cache, Tokens), Cache-Warnung, Such-Agents (Explore) auf Haiku.",
-  "author": { "name": "Fabio Brogno" },
-  "keywords": ["mods", "agents", "tokens"],
+  "version": "0.3.0",
+  "description": "Alle Claude-Code-Sitzungen und Subagents auf einen Blick, Kaltstart-Wächter gegen teure Cache-Neuaufbauten, Modellwahl-Pflicht für Subagents, Such-Agents auf Haiku.",
+  "author": {
+    "name": "Fabio Brogno"
+  },
+  "keywords": [
+    "mods",
+    "agents",
+    "tokens"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "explore_auf_haiku": {
@@ -23,6 +29,24 @@
       "title": "Cache-Warnung ab (Minuten Rest)",
       "description": "Ab dieser Restzeit erscheint die Cache-Anzeige über dem Prompt.",
       "default": 10
+    },
+    "kalt_waechter": {
+      "type": "boolean",
+      "title": "Kaltstart-Wächter",
+      "description": "Vor einem Prompt mit kaltem Cache und großem Kontext nachfragen (Neuaufbau ist teuer).",
+      "default": true
+    },
+    "kalt_schwelle_k": {
+      "type": "number",
+      "title": "Kaltstart-Schwelle (Tausend Tokens)",
+      "description": "Ab dieser Kontextgröße fragt der Wächter nach und warnt vor Pausen.",
+      "default": 200
+    },
+    "modell_pflicht": {
+      "type": "boolean",
+      "title": "Modellwahl-Pflicht",
+      "description": "general-purpose-Subagents nur mit ausdrücklichem Modell (haiku/sonnet/opus) starten.",
+      "default": true
     }
   }
 }

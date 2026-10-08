@@ -58,7 +58,7 @@ test('Band zeigt andere Sitzungen aus dem gemeinsamen Speicher', async ($, on) =
 
   const eigen: any = store.get('radar:eigene')
   expect(eigen.ort).toBe('brain')
-  expect(eigen.kontext).toBe(25)
+  expect(eigen.kontext).toBe(50_000)
 
   const ui = await $.ui.mount({
     plugin: 'agent-radar', component: 'AbovePrompt', requestId: 'band', surface: 'terminal',
