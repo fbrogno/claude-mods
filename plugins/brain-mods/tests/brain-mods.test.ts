@@ -2,6 +2,8 @@
 // kein Netzwerk; alles, was Claude Code beantworten würde, beantworten Stubs.
 import { expect, mock, test } from 'claude-code/testing'
 
+import { kontextLesung } from '../hooks/logik.mjs'
+
 const JETZT = 1_800_000_000_000
 const MIN = 60_000
 const EIGENE_ID = 'aaaaaaaa-1111-2222-3333-444444444444'
@@ -152,4 +154,9 @@ test('Nach Kompaktierung und /clear misst das Band sofort neu', async ($, on) =>
   ui = await band()
   expect(await ui.find({ type: 'Text', text: 'Kontext 6k · 3 % von 200k' })).toBeDefined()
   await ui.unmount()
+})
+
+test('Vor der ersten Antwort (noch nichts gemessen) zeigt das Band keine Kontextzeile', () => {
+  expect(kontextLesung({ window: 1_000_000 })).toBeNull()
+  expect(kontextLesung({ tokens: 420_000, window: 1_000_000 })).toEqual({ prozent: 42, tokens: 420_000, fenster: 1_000_000 })
 })

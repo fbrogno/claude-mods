@@ -203,6 +203,7 @@ export function kurzZahl(n) {
 // Aus $.session.usage().context eine Lesung { prozent, tokens, fenster } oder null (kein Fenster bekannt).
 export function kontextLesung(context) {
   if (!context || !context.window) return null;
+  if (context.tokens == null && context.percent == null) return null; // vor der ersten Antwort: noch nichts gemessen
   const tokens = Number(context.tokens ?? 0);
   const prozent = Math.round(Number(context.percent ?? (tokens / context.window) * 100));
   return { prozent, tokens, fenster: context.window };
@@ -214,7 +215,7 @@ export function kontextZeile(lesung) {
 }
 
 export const HINWEIS_GROSS = "Kontext groß — jeder Schritt liest alles neu: Stand sichern, dann /clear spart viel.";
-export const CACHE_HINWEIS = "Cache-Restzeit und Kaltstart-Wächter: Mod agent-radar (/agents)";
+export const CACHE_HINWEIS = "Cache-Restzeit und Kaltstart-Wächter: Mod agent-radar (/radar)";
 
 export function kontextBefehlText(lesung, stufe = kontextStufe(lesung)) {
   const zeilen = [kontextZeile(lesung)];

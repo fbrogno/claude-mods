@@ -1,6 +1,6 @@
 {
   "name": "brain-mods",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Kollisionsschutz für parallele Sitzungen, Kontext-Anzeige mit „Stand sichern“ und Brain-Band — 0 Tokens, nur lokal.",
   "author": {
     "name": "Fabio Brogno"
