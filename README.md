@@ -43,7 +43,7 @@ Alle Claude-Code-Sitzungen und Subagents auf einen Blick, plus Wächter gegen di
 - **Alle Sitzungen:** Jede Sitzung meldet alle 15 s ihren Stand in einen gemeinsamen lokalen Speicher, nur lokal und
   ohne Netzwerk. Das Band über dem Prompt zeigt die anderen Sitzungen: „Sitzungen: 1 arbeitet (2 Agents) · 1 fertig:
   backend vor 4:00“. So siehst du sofort, wo eine Antwort auf dich wartet.
-- **`/agents`:** ein Bereich mit allen Sitzungen (arbeitet / fertig / wartet, Projektordner, Modell, Kontextgröße,
+- **`/radar`:** ein Bereich mit allen Sitzungen (arbeitet / fertig / wartet, Projektordner, Modell, Kontextgröße,
   Cache-Restzeit, letzte Aufgabe, laufende Agents), den Agents dieser Sitzung (Status, Modell, Dauer, Tools, Tokens,
   Summe je Modell) und deinen Nutzungslimits.
 - **Kaltstart-Wächter:** Schickst du bei kaltem Cache und großem Kontext einen Prompt, fragt der Mod vorher nach und

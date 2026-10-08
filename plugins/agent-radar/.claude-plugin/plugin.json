@@ -1,6 +1,6 @@
 {
   "name": "agent-radar",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Alle Claude-Code-Sitzungen und Subagents auf einen Blick, Kaltstart-Wächter gegen teure Cache-Neuaufbauten, Modellwahl-Pflicht für Subagents, Such-Agents auf Haiku.",
   "author": {
     "name": "Fabio Brogno"

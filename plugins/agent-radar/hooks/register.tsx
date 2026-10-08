@@ -15,6 +15,7 @@ const eigeneId = atom({ plugin: 'agent-radar', key: 'eigeneId' } as const, '')
 const kontextTokens = atom({ plugin: 'agent-radar', key: 'kontextTokens' } as const, null)
 
 const BEREICH = 'agent-radar'
+export const BEFEHL = 'radar'
 const TAKT_MS = 15_000
 const PRAEFIX = 'radar:'
 /** Zeitpunkt der letzten Antwort je Sitzung — überdauert Neustarts, damit /resume den kalten Cache erkennt. */
@@ -268,7 +269,12 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const r = await next(e)
-    await $.command.register({ name: 'agents', description: 'Agent-Radar: alle Sitzungen und Subagents auf diesem Rechner' })
+    try {
+      // Nicht /agents: das ist ein eingebauter Befehl von Claude Code.
+      await $.command.register({ name: BEFEHL, description: 'Agent-Radar: alle Sitzungen und Subagents auf diesem Rechner' })
+    } catch (fehler) {
+      $.ui.log(`agent-radar: /${BEFEHL} nicht registriert: ${String((fehler as Error)?.message ?? fehler).slice(0, 160)}`, { to: 'debug' })
+    }
     seit = await $.clock.now()
     await meldenStill($)
     $.clock.every(TAKT_MS, async () => {
@@ -299,7 +305,7 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('command.run', { command: 'agents' }, async $ => {
+  on('command.run', { command: BEFEHL }, async $ => {
     await meldenStill($)
     await $.ui.open({ id: BEREICH, title: 'Agent-Radar' })
     return { text: 'Agent-Radar geöffnet.' }
