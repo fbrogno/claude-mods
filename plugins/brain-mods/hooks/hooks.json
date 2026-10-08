@@ -1,0 +1,4 @@
+{
+  "description": "brain-mods: Kollisionsschutz, Kontext-Anzeige, Brain-Band",
+  "modules": ["./brain-mods.mjs"]
+}

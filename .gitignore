@@ -1,0 +1,4 @@
+# Claude Code schreibt bei jedem Laden die Typen eines Mods hier hinein.
+**/.claude-plugin/types/
+node_modules/
+.DS_Store

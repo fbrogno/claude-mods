@@ -1,0 +1,3 @@
+# Claude Code schreibt hier bei jedem Laden die Typen des Mods hinein.
+.claude-plugin/types/
+tsconfig.json

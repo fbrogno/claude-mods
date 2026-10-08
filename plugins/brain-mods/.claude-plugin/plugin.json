@@ -1,0 +1,33 @@
+{
+  "name": "brain-mods",
+  "version": "0.1.1",
+  "description": "Kollisionsschutz für parallele Sitzungen, Kontext-Anzeige mit „Stand sichern“ und Brain-Band — 0 Tokens, nur lokal.",
+  "author": { "name": "Fabio Brogno" },
+  "keywords": ["mods", "brain"],
+  "userConfig": {
+    "brain_pfad": {
+      "type": "string",
+      "title": "Brain-Ordner",
+      "description": "Pfad zum Brain-Vault. Leer = <Home>/brain.",
+      "default": ""
+    },
+    "kollisionsschutz": {
+      "type": "boolean",
+      "title": "Kollisionsschutz",
+      "description": "Vor dem Schreiben einer Datei bzw. vor git stash/reset --hard/checkout -- . warnen, wenn eine andere Sitzung dort arbeitet.",
+      "default": true
+    },
+    "kontext": {
+      "type": "boolean",
+      "title": "Kontext-Anzeige",
+      "description": "Kontextfüllung über dem Prompt mit Knopf „Stand sichern“.",
+      "default": true
+    },
+    "brainband": {
+      "type": "boolean",
+      "title": "Brain-Band",
+      "description": "Brain-Stand und Hinweis-Seiten über dem Prompt mit Knopf „Gehirn öffnen“.",
+      "default": true
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "agent-radar",
+  "version": "0.1.0",
+  "description": "Zeigt, was Subagents gerade tun (Modell, Laufzeit, Tools, Tokens), warnt vor kaltem Prompt-Cache und schickt reine Such-Agents (Explore) auf Haiku.",
+  "author": { "name": "Fabio Brogno" },
+  "keywords": ["mods", "agents", "tokens"],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "explore_auf_haiku": {
+      "type": "boolean",
+      "title": "Explore-Agents auf Haiku",
+      "description": "Such-Agents (Typ Explore) ohne eigene Modellangabe laufen auf Haiku statt auf dem Hauptmodell.",
+      "default": true
+    },
+    "cache_minuten": {
+      "type": "number",
+      "title": "Cache-Lebensdauer (Minuten)",
+      "description": "Wie lange der Prompt-Cache nach der letzten Antwort warm bleibt.",
+      "default": 60
+    },
+    "cache_warnung_minuten": {
+      "type": "number",
+      "title": "Cache-Warnung ab (Minuten Rest)",
+      "description": "Ab dieser Restzeit erscheint die Cache-Anzeige über dem Prompt.",
+      "default": 10
+    }
+  }
+}
