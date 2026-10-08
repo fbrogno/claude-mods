@@ -1,7 +1,7 @@
 {
   "name": "agent-radar",
-  "version": "0.1.0",
-  "description": "Zeigt, was Subagents gerade tun (Modell, Laufzeit, Tools, Tokens), warnt vor kaltem Prompt-Cache und schickt reine Such-Agents (Explore) auf Haiku.",
+  "version": "0.2.0",
+  "description": "Alle Claude-Code-Sitzungen und Subagents auf einen Blick (Status, Modell, Kontext, Cache, Tokens), Cache-Warnung, Such-Agents (Explore) auf Haiku.",
   "author": { "name": "Fabio Brogno" },
   "keywords": ["mods", "agents", "tokens"],
   "types": "./types/index.d.ts",

@@ -21,11 +21,14 @@ Danach Claude Code neu starten. Einstellungen je Mod findest du im Konfiguration
 
 ### agent-radar
 
-Zeigt, was deine Subagents gerade tun und was sie kosten.
+Zeigt alle Claude-Code-Sitzungen auf deinem Rechner und was ihre Subagents gerade tun und kosten.
 
-- **Band über dem Prompt**, solange Agents laufen: Anzahl, Modell, Aufgabe, Laufzeit, Werkzeugaufrufe.
-- **`/agents`** öffnet einen Bereich mit allen Agents der Sitzung: Status, Modell, Dauer, Tools, Tokens, dazu die
-  Summe je Modell. So siehst du, wo Tokens hingehen.
+- **Alle Sitzungen:** Jede Sitzung mit agent-radar meldet alle 15 s ihren Stand in einen gemeinsamen lokalen
+  Speicher, nur lokal und ohne Netzwerk. Das Band über dem Prompt zeigt die anderen Sitzungen: „Sitzungen: 1 arbeitet
+  (2 Agents) · 1 fertig: backend vor 4:00“. So siehst du sofort, wo eine Antwort auf dich wartet.
+- **`/agents`** öffnet einen Bereich mit allen Sitzungen (arbeitet / fertig / wartet, Projektordner, Modell,
+  Kontextfüllung, Cache-Restzeit, letzte Aufgabe, laufende Agents) und den Agents dieser Sitzung (Status, Modell,
+  Dauer, Tools, Tokens, Summe je Modell) sowie deine Nutzungslimits.
 - **Explore-Agents auf Haiku:** Reine Such-Agents (Typ `Explore`) ohne eigene Modellangabe laufen auf Haiku statt
   auf dem teuren Hauptmodell. Das Hauptgespräch bleibt unverändert. Abschaltbar.
 - **Cache-Warnung:** Der Prompt-Cache hält nach der letzten Antwort nur eine begrenzte Zeit. Kurz vor Ablauf

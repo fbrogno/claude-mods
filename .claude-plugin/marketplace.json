@@ -6,7 +6,7 @@
     {
       "name": "agent-radar",
       "source": "./plugins/agent-radar",
-      "description": "Subagents im Blick (Modell, Laufzeit, Tools, Tokens), Cache-Warnung, Explore-Agents auf Haiku."
+      "description": "Alle Sitzungen und Subagents im Blick (Status, Modell, Kontext, Tokens), Cache-Warnung, Explore-Agents auf Haiku."
     },
     {
       "name": "brain-mods",
