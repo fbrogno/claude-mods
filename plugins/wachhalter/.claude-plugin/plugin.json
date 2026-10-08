@@ -1,0 +1,13 @@
+{
+  "name": "wachhalter",
+  "version": "0.1.0",
+  "description": "/wach hält den Mac per caffeinate wach — ohne Umweg über das Modell, also ohne Tokens. /wach 1 · /wach 30m · /wach aus · /wach",
+  "author": {
+    "name": "Fabio Brogno"
+  },
+  "keywords": [
+    "mods",
+    "macos",
+    "caffeinate"
+  ]
+}
