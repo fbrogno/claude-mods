@@ -176,10 +176,21 @@ export function riskanterGitBefehl(befehl) {
 
 // ---- Kontext ------------------------------------------------------------------------------------------
 
-export function kontextFarbe(prozent) {
-  if (prozent < 60) return "green";
-  if (prozent < 80) return "yellow";
-  return "red";
+export const KONTEXT_GELB = 200_000;
+export const KONTEXT_ROT = 350_000;
+
+// Stufe 0/1/2 aus absoluter Größe ODER Füllgrad: Bei 1M-Fenstern zählt die Größe — jeder Schritt liest den ganzen
+// Kontext neu, die Kosten je Schritt wachsen also mit ihr. Bei kleinen Fenstern zählt weiter der Füllgrad
+// (Kompaktierung naht).
+export function kontextStufe(lesung, gelb = KONTEXT_GELB, rot = KONTEXT_ROT) {
+  if (!lesung) return 0;
+  if (lesung.tokens >= rot || lesung.prozent >= 80) return 2;
+  if (lesung.tokens >= gelb || lesung.prozent >= 60) return 1;
+  return 0;
+}
+
+export function kontextFarbe(stufe) {
+  return ["green", "yellow", "red"][stufe] || "green";
 }
 
 export function kurzZahl(n) {
@@ -199,16 +210,16 @@ export function kontextLesung(context) {
 
 export function kontextZeile(lesung) {
   if (!lesung) return "Kontext: noch keine Messung";
-  return `Kontext ${lesung.prozent} % · ${kurzZahl(lesung.tokens)} / ${kurzZahl(lesung.fenster)}`;
+  return `Kontext ${kurzZahl(lesung.tokens)} · ${lesung.prozent} % von ${kurzZahl(lesung.fenster)}`;
 }
 
-export const HINWEIS_FAST_VOLL = "Kontext fast voll — Stand sichern?";
-export const CACHE_NICHT_VERFUEGBAR = "Cache-Restzeit: liefert die Mods-API nicht";
+export const HINWEIS_GROSS = "Kontext groß — jeder Schritt liest alles neu: Stand sichern, dann /clear spart viel.";
+export const CACHE_HINWEIS = "Cache-Restzeit und Kaltstart-Wächter: Mod agent-radar (/agents)";
 
-export function kontextBefehlText(lesung) {
+export function kontextBefehlText(lesung, stufe = kontextStufe(lesung)) {
   const zeilen = [kontextZeile(lesung)];
-  if (lesung && lesung.prozent >= 80) zeilen.push(HINWEIS_FAST_VOLL);
-  zeilen.push(CACHE_NICHT_VERFUEGBAR);
+  if (stufe === 2) zeilen.push(HINWEIS_GROSS);
+  zeilen.push(CACHE_HINWEIS);
   return zeilen.join("\n");
 }
 

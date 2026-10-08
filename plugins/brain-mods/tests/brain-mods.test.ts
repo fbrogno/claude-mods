@@ -105,9 +105,9 @@ test('/kontext zeigt Füllung und ab 80 % den Hinweis', async ($, on) => {
   const s = stubs(on, { prozent: 85 })
   await $.session.start(START)
   const antwort: any = await $.command.run({ command: 'kontext', args: '' })
-  expect(antwort.text).toContain('Kontext 85 %')
-  expect(antwort.text).toContain('Kontext fast voll')
-  expect(s.toasts).toEqual(['Kontext fast voll — Stand sichern?'])
+  expect(antwort.text).toContain('85 %')
+  expect(antwort.text).toContain('Kontext groß')
+  expect(s.toasts).toEqual(['Kontext groß — jeder Schritt liest alles neu: Stand sichern, dann /clear spart viel.'])
 })
 
 test('Band zeigt Kontext, Brain-Stand, Hinweis-Seiten und die Knöpfe', async ($, on) => {
@@ -119,7 +119,7 @@ test('Band zeigt Kontext, Brain-Stand, Hinweis-Seiten und die Knöpfe', async ($
     viewport: { columns: 120, rows: 40 },
     props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 110, scroll: { offset: 0, bodyRows: 6 }, view: {} },
   } as any)
-  expect(await ui.find({ type: 'Text', text: 'Kontext 42 % · 84k / 200k' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Kontext 84k · 42 % von 200k' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Brain: 2 wartend' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '· 1 Konflikt(e)!' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Hinweis zur letzten Frage: alpha · beta' })).toBeDefined()
@@ -140,16 +140,16 @@ test('Nach Kompaktierung und /clear misst das Band sofort neu', async ($, on) =>
     props: { hasSurvey: false, isWorking: false, maxRows: 6, bodyColumns: 110, scroll: { offset: 0, bodyRows: 6 }, view: {} },
   } as any)
   let ui = await band()
-  expect(await ui.find({ type: 'Text', text: 'Kontext 88 % · 176k / 200k' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Kontext 176k · 88 % von 200k' })).toBeDefined()
   await ui.unmount()
   opts.prozent = 12
   await ($ as any).classic.PostCompact({ trigger: 'manual' })
   ui = await band()
-  expect(await ui.find({ type: 'Text', text: 'Kontext 12 % · 24k / 200k' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Kontext 24k · 12 % von 200k' })).toBeDefined()
   await ui.unmount()
   opts.prozent = 3
   await ($ as any).classic.SessionStart({ source: 'clear' })
   ui = await band()
-  expect(await ui.find({ type: 'Text', text: 'Kontext 3 % · 6k / 200k' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Kontext 6k · 3 % von 200k' })).toBeDefined()
   await ui.unmount()
 })

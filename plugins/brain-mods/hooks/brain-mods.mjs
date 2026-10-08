@@ -10,10 +10,10 @@
 // Die Mods-API wird ausgeschrieben ($.namensraum.methode) und nur an Funktionen auf oberster Ebene übergeben,
 // weil Claude Code das Modul statisch analysiert (claude plugin validate).
 import {
-  SCHLUESSEL_PRAEFIX, HERZ_MS, BRAIN_MS, ANSPRUCH_MS, FORTFAHREN, ABBRECHEN, HINWEIS_FAST_VOLL,
+  SCHLUESSEL_PRAEFIX, HERZ_MS, BRAIN_MS, ANSPRUCH_MS, FORTFAHREN, ABBRECHEN, HINWEIS_GROSS,
   normalisierePfad, werkzeugPfad, neuerEintrag, anspruchSetzen, herzschlag, istVerwaist,
   findeKollision, findeRepoKollision, kollisionsFrage, repoFrage, riskanterGitBefehl,
-  kontextLesung, kontextZeile, kontextFarbe, kontextBefehlText, brainTeile, leseStandAusgabe, seitenName,
+  kontextLesung, kontextZeile, kontextFarbe, kontextStufe, kontextBefehlText, brainTeile, leseStandAusgabe, seitenName,
 } from "./logik.mjs";
 
 // ---- Zustand dieses Moduls (geht bei einem Neuladen verloren; der eigene Eintrag kommt aus $.store zurück) ----
@@ -26,6 +26,8 @@ let brainOrt = ""; // Vault-Pfad (~/brain oder userConfig brain_pfad)
 let brain = null; // { stand, hinweis } aus brain-stand.mjs --json
 
 const an = (schluessel) => optionen[schluessel] !== false;
+const tausend = (schluessel, standard) => (Number(optionen[schluessel]) || standard) * 1000;
+const stufe = (l) => kontextStufe(l, tausend("kontext_gelb_k", 200), tausend("kontext_rot_k", 350));
 
 export function register(on, options) {
   optionen = options || {};
@@ -144,7 +146,7 @@ export function register(on, options) {
     } catch (fehler) {
       still($, "/kontext", fehler);
     }
-    return { text: kontextBefehlText(lesung) };
+    return { text: kontextBefehlText(lesung, stufe(lesung)) };
   });
 
   // ---- Band über dem Prompt: Kontextzeile (Mod 2), Brain-Zeile und Hinweis-Seiten (Mod 3) ----
@@ -155,8 +157,9 @@ export function register(on, options) {
     const zeilen = [];
 
     if (an("kontext") && lesung) {
-      const teile = [Text({ key: "kontext-wert", color: kontextFarbe(lesung.prozent), bold: true, children: [kontextZeile(lesung)] })];
-      if (lesung.prozent >= 80) teile.push(Text({ key: "kontext-voll", color: "red", children: [HINWEIS_FAST_VOLL] }));
+      const s = stufe(lesung);
+      const teile = [Text({ key: "kontext-wert", color: kontextFarbe(s), bold: true, children: [kontextZeile(lesung)] })];
+      if (s === 2) teile.push(Text({ key: "kontext-voll", color: "red", children: [HINWEIS_GROSS] }));
       teile.push(Button({ key: "stand-sichern", label: "Stand sichern", onPress: () => { standSichern($); } }));
       zeilen.push(Box({ key: "zeile-kontext", flexDirection: "row", columnGap: 2, children: teile }));
     }
@@ -306,11 +309,11 @@ async function fragen($, frage) {
 async function kontextMessen($) {
   const { context } = await $.session.usage();
   lesung = kontextLesung(context);
-  if (lesung && lesung.prozent >= 80 && !hingewiesen) {
+  if (lesung && stufe(lesung) === 2 && !hingewiesen) {
     hingewiesen = true;
-    $.ui.toast(HINWEIS_FAST_VOLL, { timeoutMs: 8000 });
+    $.ui.toast(HINWEIS_GROSS, { timeoutMs: 8000 });
   }
-  if (lesung && lesung.prozent < 60) hingewiesen = false; // nach Kompaktierung wieder scharf
+  if (lesung && stufe(lesung) === 0) hingewiesen = false; // nach /clear oder Kompaktierung wieder scharf
   $.ui.invalidate("ui.render");
 }
 

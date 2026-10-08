@@ -1,9 +1,14 @@
 {
   "name": "brain-mods",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Kollisionsschutz für parallele Sitzungen, Kontext-Anzeige mit „Stand sichern“ und Brain-Band — 0 Tokens, nur lokal.",
-  "author": { "name": "Fabio Brogno" },
-  "keywords": ["mods", "brain"],
+  "author": {
+    "name": "Fabio Brogno"
+  },
+  "keywords": [
+    "mods",
+    "brain"
+  ],
   "userConfig": {
     "brain_pfad": {
       "type": "string",
@@ -28,6 +33,18 @@
       "title": "Brain-Band",
       "description": "Brain-Stand und Hinweis-Seiten über dem Prompt mit Knopf „Gehirn öffnen“.",
       "default": true
+    },
+    "kontext_gelb_k": {
+      "type": "number",
+      "title": "Kontext gelb ab (Tausend Tokens)",
+      "description": "Ab dieser Größe wird die Kontext-Anzeige gelb.",
+      "default": 200
+    },
+    "kontext_rot_k": {
+      "type": "number",
+      "title": "Kontext rot ab (Tausend Tokens)",
+      "description": "Ab dieser Größe rot mit Hinweis „Stand sichern, dann /clear“.",
+      "default": 350
     }
   }
 }
