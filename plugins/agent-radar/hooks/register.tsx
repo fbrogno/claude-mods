@@ -653,7 +653,10 @@ export const register: Register = (on, options) => {
     seit = await $.clock.now()
     if (text && !text.startsWith('/')) aufgabe = aufgabeAus(text)
     void meldenStill($)
-    return next(e)
+    const ergebnis = await next(e)
+    // Ein Hook darunter hat den Prompt verworfen: es läuft kein Turn, Keepwarm darf weiter pingen.
+    if (ergebnis.drop !== undefined) kwTurnLaeuft = false
+    return ergebnis
   })
 
   on('agent.spawn', async ($, e, next) => {
