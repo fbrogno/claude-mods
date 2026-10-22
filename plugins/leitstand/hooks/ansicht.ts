@@ -715,7 +715,7 @@ export function baueAnsicht(d: AnsichtDaten): Ansicht {
         segs: zeileAus(sp, w, {
           punkt: { segs: [S('●', { c: modellFarbe(fam) })] },
           name: { segs: [S(m.modell)] },
-          balken: { segs: [S(balken(anteil, w.get('balken') ?? 10, '▰', '▱'), { c: modellFarbe(fam) })] },
+          balken: { segs: [S(balken(anteil, w.get('balken') ?? 10, '█', '░'), { c: modellFarbe(fam) })] },
           anfr: { segs: [S(`${ganzzahl(m.z.anfragen)} Anfr.`, { dim: true })], ausr: 'r' },
           ein: { segs: [S('↑', { dim: true }), S(tokens(eingabeGesamt(m.z)))], ausr: 'r' },
           aus: { segs: [S('↓', { dim: true }), S(tokens(m.z.ausgabe))], ausr: 'r' },

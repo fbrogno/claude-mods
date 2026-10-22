@@ -318,46 +318,42 @@ export function crewZellen(figuren: Figur[], spalten: number, tick: number, jetz
   return z
 }
 
-// ---- Ring (Braille) -----------------------------------------------------------------------------------------
-
-const BRAILLE_BIT: Array<[number, number, number]> = [
-  [0, 0, 0x01], [0, 1, 0x02], [0, 2, 0x04], [1, 0, 0x08], [1, 1, 0x10], [1, 2, 0x20], [0, 3, 0x40], [1, 3, 0x80],
-]
+// ---- Ring (Halbblöcke) ---------------------------------------------------------------------------------
+// Halbblöcke (▀▄█) statt Braille: jede Terminalschrift hat sie, Braille fehlt in manchen (dort nur verstreute Punkte).
+// Eine Zelle = 2 Pixel übereinander, Pixel quadratisch → 10×5 Zellen sind ein 10×10-Pixel-Kreis.
 
 export const RING_SPALTEN = 10
 export const RING_ZEILEN = 5
 
 /**
- * Ein Ring aus Braille-Punkten, im Uhrzeigersinn ab oben zu `anteil` (0 bis 1) farbig, der Rest gedimmt.
- * Die Mitte bleibt frei für `mitte` (z. B. „95 %"). Eine Zelle trägt nur eine Farbe: an der Grenze entscheidet die Mehrheit ihrer Punkte.
+ * Ein Ring, im Uhrzeigersinn ab oben zu `anteil` (0 bis 1) farbig, der Rest gedimmt.
+ * Die Mitte bleibt frei für `mitte` (z. B. „95 %").
  */
 export function ringZellen(anteil: number | null, mitte: string, fuell: string, rest: string): Zellen {
   const z = new Zellen(RING_SPALTEN, RING_ZEILEN)
-  const bw = RING_SPALTEN * 2
-  const bh = RING_ZEILEN * 4
+  const bw = RING_SPALTEN
+  const bh = RING_ZEILEN * 2
   const cx = bw / 2
   const cy = bh / 2
-  const aussen = Math.min(bw, bh) / 2 - 0.4
-  const innen = aussen - 2.2
+  const aussen = Math.min(bw, bh) / 2
+  const innen = aussen - 2
   const a = anteil === null ? 0 : Math.max(0, Math.min(1, anteil))
+  const pixel = (px: number, py: number): string | null => {
+    const x = px + 0.5 - cx
+    const y = py + 0.5 - cy
+    const r = Math.hypot(x, y)
+    if (r < innen || r > aussen) return null
+    let w = Math.atan2(x, -y) // 0 oben, im Uhrzeigersinn wachsend
+    if (w < 0) w += Math.PI * 2
+    return w / (Math.PI * 2) < a ? fuell : rest
+  }
   for (let zy = 0; zy < RING_ZEILEN; zy++) {
     for (let zx = 0; zx < RING_SPALTEN; zx++) {
-      let bits = 0
-      let gefuellt = 0
-      let punkte = 0
-      for (const [dx, dy, bit] of BRAILLE_BIT) {
-        const px = zx * 2 + dx + 0.5
-        const py = zy * 4 + dy + 0.5
-        const r = Math.hypot(px - cx, py - cy)
-        if (r < innen || r > aussen) continue
-        bits |= bit
-        punkte++
-        let w = Math.atan2(px - cx, -(py - cy)) // 0 oben, im Uhrzeigersinn wachsend
-        if (w < 0) w += Math.PI * 2
-        if (w / (Math.PI * 2) < a) gefuellt++
-      }
-      if (bits === 0) continue
-      z.setze(zx, zy, String.fromCodePoint(0x2800 + bits), farbe(gefuellt * 2 >= punkte && gefuellt > 0 ? fuell : rest))
+      const oben = pixel(zx, zy * 2)
+      const unten = pixel(zx, zy * 2 + 1)
+      if (oben && unten) z.setze(zx, zy, oben === unten ? '█' : '▀', farbe(oben), oben === unten ? undefined : farbe(unten))
+      else if (oben) z.setze(zx, zy, '▀', farbe(oben))
+      else if (unten) z.setze(zx, zy, '▄', farbe(unten))
     }
   }
   const zeile = Math.floor(RING_ZEILEN / 2)
