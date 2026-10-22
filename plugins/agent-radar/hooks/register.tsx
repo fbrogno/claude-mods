@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PromptOrigin, Register } from 'claude-code'
 
-import type { AgentStand, AgentZeile, SitzungsStand } from '../types'
+import type { AgentStand, AgentZeile, KeepwarmStand, SitzungsStand } from '../types'
 
 const agents = atom({ plugin: 'agent-radar', key: 'agents' } as const, [])
 /** Zeitpunkt der letzten Antwort im Hauptgespräch — ab da läuft der Prompt-Cache ab. */
@@ -14,8 +14,12 @@ const eigeneId = atom({ plugin: 'agent-radar', key: 'eigeneId' } as const, '')
 /** Kontextgröße des Hauptgesprächs in Tokens, zuletzt gemessen. */
 const kontextTokens = atom({ plugin: 'agent-radar', key: 'kontextTokens' } as const, null)
 
+/** Keepwarm dieser Sitzung (Frist, Pings, Abbruchgrund); null = nie gestartet oder ausgeschaltet. */
+const keepwarm = atom({ plugin: 'agent-radar', key: 'keepwarm' } as const, null)
+
 const BEREICH = 'agent-radar'
 export const BEFEHL = 'radar'
+export const KEEPWARM_BEFEHL = 'keepwarm'
 const TAKT_MS = 15_000
 const PRAEFIX = 'radar:'
 /** Zeitpunkt der letzten Antwort je Sitzung — überdauert Neustarts, damit /resume den kalten Cache erkennt. */
@@ -79,6 +83,90 @@ export function dollar(betrag: number): string {
 export function cacheRest(letzte: number | null, jetztMs: number, minuten: number): number | null {
   if (letzte === null) return null
   return Math.ceil((letzte + minuten * 60_000 - jetztMs) / 60_000)
+}
+
+// ---- Keepwarm: reine Logik (getestet) -----------------------------------------------------------
+// Ansatz nach cache-tax (MIT, Karan Bansal), auf agent-radar zugeschnitten.
+
+const MIN_MS = 60_000
+/** So viele Minuten vor Ablauf des Caches geht der Ping raus. */
+export const PING_VORLAUF_MIN = 10
+/** Ein Ping muss spätestens so lange vor Ablauf des Caches landen. */
+export const PING_RESERVE_MS = MIN_MS
+export const MAX_WIEDERHOLUNGEN = 3
+/** Der Hinweis auf einen Abbruch bleibt so lange im Band. */
+export const ABBRUCH_ANZEIGE_MS = 10 * MIN_MS
+export const PING_PROMPT = 'Antworte nur mit dem Wort: warm'
+
+/** „45m“, „2h“, „1h30m“ (auch mit Leerzeichen) in Millisekunden; null bei allem anderen. */
+export function parseDauer(text: string): number | null {
+  const m = text.trim().toLowerCase().replace(/\s+/g, '').match(/^(?:(\d+)h)?(?:(\d+)m(?:in)?)?$/)
+  if (!m || (!m[1] && !m[2])) return null
+  const ms = ((Number(m[1] ?? 0) * 60) + Number(m[2] ?? 0)) * MIN_MS
+  return ms > 0 ? ms : null
+}
+
+/** Dauer auf das Maximum (Stunden) begrenzen. */
+export function deckeln(ms: number, maxStunden: number): { ms: number; gedeckelt: boolean } {
+  const max = maxStunden * 3_600_000
+  return ms > max ? { ms: max, gedeckelt: true } : { ms, gedeckelt: false }
+}
+
+/** „1 h 20 min“, „45 min“, „<1 min“. */
+export function langDauer(ms: number): string {
+  const m = Math.max(0, Math.round(ms / MIN_MS))
+  if (m < 1) return '<1 min'
+  if (m < 60) return `${m} min`
+  return m % 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m / 60} h`
+}
+
+/** Zeitpunkt des Pings: cache_minuten − 10 min nach der letzten Antwort (mindestens 1 min). */
+export function pingZeit(letzte: number, cacheMinuten: number): number {
+  return letzte + Math.max(cacheMinuten - PING_VORLAUF_MIN, 1) * MIN_MS
+}
+
+type PingUsage = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
+
+/** Warm: der Ping hat den Cache gelesen und nur seine eigene Nachricht geschrieben (< 10 % des Gelesenen). */
+export function istWarm(u: Pick<PingUsage, 'cache_read_input_tokens' | 'cache_creation_input_tokens'>): boolean {
+  return u.cache_read_input_tokens > 0 && u.cache_creation_input_tokens < 0.1 * u.cache_read_input_tokens
+}
+
+/** Kosten eines Pings in $ (Näherung: Eingabe = 10 × Lesepreis, Ausgabe = 5 × Eingabe). */
+export function pingKosten(u: PingUsage, modell: string): number {
+  const p = preise(modell)
+  return (u.cache_read_input_tokens * p.lesen + u.cache_creation_input_tokens * p.schreiben + u.input_tokens * p.lesen * 10 + u.output_tokens * p.lesen * 50) / 1e6
+}
+
+/** Wartezeit bis zur nächsten Wiederholung (1, 2, 4 min); null, wenn Grenze oder Frist/Cache-Ablauf im Weg stehen. */
+export function wiederholungsWartezeit(
+  jetztMs: number,
+  o: { letzte: number; cacheMinuten: number; frist: number; versuche: number },
+): number | null {
+  if (o.versuche >= MAX_WIEDERHOLUNGEN) return null
+  const wait = MIN_MS * 2 ** o.versuche
+  const grenze = Math.min(o.frist, o.letzte + o.cacheMinuten * MIN_MS - PING_RESERVE_MS)
+  return jetztMs + wait < grenze ? wait : null
+}
+
+/** Nur 429, 5xx und „kein Status“ (Netz) lohnen eine Wiederholung. */
+export function wiederholbar(status: number | null): boolean {
+  return status === null || status === 429 || status >= 500
+}
+
+/** Eine Zeile fürs Band; null, wenn nichts anzuzeigen ist. */
+export function keepwarmText(k: KeepwarmStand | null, jetztMs: number, letzte: number | null, cacheMinuten: number): string | null {
+  if (!k) return null
+  const summe = `${k.pings} ${k.pings === 1 ? 'Ping' : 'Pings'} ≈ ${dollar(k.kosten)} $`
+  if (!k.aktiv) {
+    if (!k.grund || k.beendetAm === null || jetztMs - k.beendetAm > ABBRUCH_ANZEIGE_MS) return null
+    return `Keepwarm beendet: ${k.grund}${k.pings ? ` · ${summe}` : ''}`
+  }
+  const rest = `Keepwarm: noch ${langDauer(k.frist - jetztMs)}`
+  if (k.wartet || letzte === null) return `${rest} · wartet auf die nächste Antwort · ${summe}`
+  const bis = pingZeit(letzte, cacheMinuten) - jetztMs
+  const ping = k.wiederholung ? `Wiederholung ${k.wiederholung} von ${MAX_WIEDERHOLUNGEN}` : bis > 0 ? `Ping in ${langDauer(bis)}` : 'Ping gleich'
+  return `${rest} · ${ping} · ${summe}`
 }
 
 export function standAus(status: string): AgentStand | null {
@@ -259,6 +347,160 @@ async function standSichern($: EngineInterface) {
   }
 }
 
+// ---- Keepwarm: Engine -------------------------------------------------------------------------------
+// Nur Zeitgeber und laufende Pings liegen in Modulvariablen (gehen beim Neuladen verloren); Frist und Zähler
+// liegen im Zustand `keepwarm`, der Takt und session.start planen danach neu.
+
+let kwTimer: { cancel: () => void } | null = null
+let kwImFlug = false
+/** Generationszähler: jede echte Antwort, jedes Beenden und jeder Neustart macht laufende Pings ungültig. */
+let kwGen = 0
+let kwVersuche = 0
+
+type KwConfig = { cacheMinuten: number; maxStunden: number }
+
+async function letzteAntwortLesen($: EngineInterface): Promise<number | null> {
+  const a = await read($, letzteAntwort)
+  if (a !== null) return a
+  const gemerkt = await $.store.get(ANTWORT + (await $.session.id()))
+  return typeof gemerkt === 'number' ? gemerkt : null
+}
+
+function kwTimerStoppen() {
+  if (kwTimer) kwTimer.cancel()
+  kwTimer = null
+}
+
+/** Beenden mit Grund (Toast + Zeile im Band); ohne Grund (`/keepwarm aus`, Sitzungsende) verschwindet die Anzeige. */
+async function kwBeenden($: EngineInterface, grund: string | null) {
+  kwGen++
+  kwVersuche = 0
+  kwTimerStoppen()
+  const now = await $.clock.now()
+  await update($, keepwarm, k =>
+    grund === null || !k ? null : { ...k, aktiv: false, wartet: false, wiederholung: 0, grund, beendetAm: now },
+  )
+  if (grund !== null) {
+    try {
+      $.ui.toast(`Keepwarm beendet: ${grund}`)
+    } catch {
+      // Umgebung schon entladen
+    }
+  }
+}
+
+/** Takt neu setzen: Ping bei letzte Antwort + (cache_minuten − 10 min). Idempotent, ersetzt einen laufenden Zeitgeber. */
+async function kwPlanen($: EngineInterface, cfg: KwConfig) {
+  kwTimerStoppen()
+  const k = await read($, keepwarm)
+  if (!k?.aktiv) return
+  const now = await $.clock.now()
+  if (now >= k.frist) return kwBeenden($, 'Frist erreicht')
+  const letzte = await letzteAntwortLesen($)
+  kwTimerStoppen() // ein Zeitgeber, der während des Lesens gesetzt wurde, weicht diesem
+  if (letzte === null) {
+    await update($, keepwarm, z => (z ? { ...z, wartet: true } : z))
+    return
+  }
+  const ablauf = letzte + cfg.cacheMinuten * MIN_MS
+  if (now >= ablauf - PING_RESERVE_MS) return kwBeenden($, 'Cache war schon abgelaufen')
+  const faellig = pingZeit(letzte, cfg.cacheMinuten)
+  if (faellig >= k.frist) return kwBeenden($, 'Frist erreicht, bevor ein Ping nötig wird')
+  if (k.wartet) await update($, keepwarm, z => (z ? { ...z, wartet: false } : z))
+  kwTimer = $.clock.after(Math.max(1000, faellig - now), () => void kwPing($, cfg).catch(() => undefined))
+  await update($, jetzt, () => now)
+}
+
+async function kwPing($: EngineInterface, cfg: KwConfig) {
+  kwTimer = null
+  const k = await read($, keepwarm)
+  if (!k?.aktiv || kwImFlug) return
+  const gen = kwGen
+  const now = await $.clock.now()
+  const letzte = await letzteAntwortLesen($)
+  if (gen !== kwGen) return
+  if (now >= k.frist) return kwBeenden($, 'Frist erreicht')
+  if (letzte === null) return kwPlanen($, cfg)
+  if (now >= letzte + cfg.cacheMinuten * MIN_MS - PING_RESERVE_MS) return kwBeenden($, 'Cache war schon abgelaufen')
+  // Eine Antwort hat die Uhr verschoben: neu planen statt zu früh zu pingen.
+  if (now < pingZeit(letzte, cfg.cacheMinuten) - 1000 && !kwVersuche) return kwPlanen($, cfg)
+  if (kwImFlug) return // nach dem letzten await gesetzt: nie zwei Pings gleichzeitig
+  kwImFlug = true
+  const gesendet = await $.model.fork({ prompt: PING_PROMPT }).then(
+    reply => ({ reply }),
+    (err: unknown) => ({ err }),
+  )
+  kwImFlug = false
+  const at = await $.clock.now()
+  // Nach dem letzten await geprüft: Antwort, /clear, Kompaktierung oder Aus haben den Ping überholt.
+  if (gen !== kwGen) return kwPlanen($, cfg)
+  if ('err' in gesendet) return kwBeenden($, `Ping fehlgeschlagen (${String((gesendet.err as Error)?.message ?? gesendet.err).slice(0, 80)})`)
+  const reply = gesendet.reply
+  if (reply === null || reply === undefined) return kwBeenden($, 'Ping nicht gesendet (Cache vermutlich schon kalt)')
+  if (reply.isAnswered === false) {
+    // Frisch gestartet oder nach /clear gibt es nichts zu forken: auf die nächste Antwort warten, nicht abbrechen.
+    if (reply.reason === 'nothing-to-fork') {
+      await update($, keepwarm, z => (z ? { ...z, wartet: true, wiederholung: 0 } : z))
+      return
+    }
+    if (reply.reason === 'api-error') {
+      const wait = wiederholbar(reply.status) ? wiederholungsWartezeit(at, { letzte, cacheMinuten: cfg.cacheMinuten, frist: k.frist, versuche: kwVersuche }) : null
+      if (wait !== null) {
+        kwVersuche++
+        kwTimerStoppen()
+        kwTimer = $.clock.after(wait, () => void kwPing($, cfg).catch(() => undefined))
+        await update($, keepwarm, z => (z ? { ...z, wiederholung: kwVersuche } : z))
+        return
+      }
+      return kwBeenden($, `API-Fehler${reply.status === null ? '' : ` ${reply.status}`}${kwVersuche ? ` nach ${kwVersuche} Wiederholungen` : ''}`)
+    }
+    return kwBeenden($, reply.reason === 'aborted' ? 'Ping unterbrochen' : 'Ping ohne Antworttext')
+  }
+  const u = reply.usage
+  const kosten = pingKosten(u, await $.session.model())
+  await update($, keepwarm, z => (z ? { ...z, pings: z.pings + 1, kosten: z.kosten + kosten, wiederholung: 0 } : z))
+  if (!istWarm(u)) {
+    return kwBeenden($, `Ping war nicht warm (gelesen ${tokens(u.cache_read_input_tokens)}, geschrieben ${tokens(u.cache_creation_input_tokens)}) — Cache war schon weg`)
+  }
+  // Der Ping hat den Cache verlängert: sonst warnt der Kaltstart-Wächter fälschlich.
+  kwVersuche = 0
+  await update($, letzteAntwort, () => at)
+  try {
+    await $.store.set(ANTWORT + (await $.session.id()), at)
+  } catch {
+    // nur für die Kaltstart-Prüfung
+  }
+  await kwPlanen($, cfg)
+}
+
+/** Befehl `/keepwarm`: Dauer, aus oder Status. */
+async function kwBefehl($: EngineInterface, args: string, cfg: KwConfig): Promise<string> {
+  const wort = args.trim().toLowerCase()
+  const now = await $.clock.now()
+  const k = await read($, keepwarm)
+  if (wort === '') {
+    const text = keepwarmText(k, now, await letzteAntwortLesen($), cfg.cacheMinuten)
+    return text ?? (k?.grund ? `Keepwarm aus (zuletzt beendet: ${k.grund}).` : 'Keepwarm aus. Start mit /keepwarm 1h.')
+  }
+  if (wort === 'aus' || wort === 'off') {
+    const war = !!k?.aktiv
+    await kwBeenden($, null)
+    return war ? 'Keepwarm aus.' : 'Keepwarm war nicht aktiv.'
+  }
+  const roh = parseDauer(wort)
+  if (roh === null) return 'Keepwarm: Dauer wie 45m, 2h oder 1h30m, oder „aus“ bzw. ohne Argument für den Status.'
+  const { ms, gedeckelt } = deckeln(roh, cfg.maxStunden)
+  kwGen++
+  kwVersuche = 0
+  kwTimerStoppen()
+  await update($, keepwarm, () => ({ frist: now + ms, aktiv: true, wartet: false, wiederholung: 0, pings: 0, kosten: 0, grund: null, beendetAm: null }))
+  await kwPlanen($, cfg)
+  const danach = await read($, keepwarm)
+  if (!danach?.aktiv) return `Keepwarm nicht gestartet: ${danach?.grund ?? 'unbekannt'}.`
+  const text = keepwarmText(danach, now, await letzteAntwortLesen($), cfg.cacheMinuten)
+  return `${gedeckelt ? `Auf das Maximum von ${cfg.maxStunden} h gedeckelt (keepwarm_max_stunden). ` : ''}${text}`
+}
+
 export const register: Register = (on, options) => {
   const exploreAufHaiku = options.explore_auf_haiku !== false
   const cacheMinuten = Number(options.cache_minuten ?? 60) || 60
@@ -266,6 +508,7 @@ export const register: Register = (on, options) => {
   const kaltWaechter = options.kalt_waechter !== false
   const kaltSchwelle = (Number(options.kalt_schwelle_k ?? 200) || 200) * 1000
   const modellPflicht = options.modell_pflicht !== false
+  const kw: KwConfig = { cacheMinuten, maxStunden: Number(options.keepwarm_max_stunden ?? 4) || 4 }
 
   on('session.start', async ($, e, next) => {
     const r = await next(e)
@@ -275,11 +518,22 @@ export const register: Register = (on, options) => {
     } catch (fehler) {
       $.ui.log(`agent-radar: /${BEFEHL} nicht registriert: ${String((fehler as Error)?.message ?? fehler).slice(0, 160)}`, { to: 'debug' })
     }
+    try {
+      await $.command.register({ name: KEEPWARM_BEFEHL, description: 'Keepwarm: Prompt-Cache in der Pause per Mini-Ping warm halten (/keepwarm 1h, aus, Status)' })
+    } catch (fehler) {
+      $.ui.log(`agent-radar: /${KEEPWARM_BEFEHL} nicht registriert: ${String((fehler as Error)?.message ?? fehler).slice(0, 160)}`, { to: 'debug' })
+    }
     seit = await $.clock.now()
     await meldenStill($)
+    await kwPlanen($, kw).catch(() => undefined) // Frist aus dem Zustand nach einem Neuladen neu planen
     $.clock.every(TAKT_MS, async () => {
       await abgleichen($)
       await meldenStill($)
+      // Sicherheitsnetz: aktiv, aber ohne Zeitgeber (z. B. nach Neuladen) und kein Ping unterwegs.
+      if (!kwTimer && !kwImFlug) {
+        const k = await read($, keepwarm)
+        if (k?.aktiv && !k.wartet) await kwPlanen($, kw).catch(() => undefined)
+      }
     })
     return r
   })
@@ -287,6 +541,7 @@ export const register: Register = (on, options) => {
   // Nach /clear den zurückgehaltenen Prompt wieder ins Eingabefeld legen.
   on('classic.SessionStart', { source: 'clear' }, async ($, e, next) => {
     const r = await next(e)
+    if ((await read($, keepwarm))?.aktiv) await kwBeenden($, 'Sitzung mit /clear geleert')
     if (wartenderPrompt) {
       const text = wartenderPrompt
       wartenderPrompt = null
@@ -297,6 +552,13 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
+    kwGen++
+    kwTimerStoppen()
+    try {
+      await update($, keepwarm, () => null)
+    } catch {
+      // beim Beenden nie stören
+    }
     try {
       await $.store.delete(PRAEFIX + (await $.session.id()))
     } catch {
@@ -309,6 +571,17 @@ export const register: Register = (on, options) => {
     await meldenStill($)
     await $.ui.open({ id: BEREICH, title: 'Agent-Radar' })
     return { text: 'Agent-Radar geöffnet.' }
+  })
+
+  on('command.run', { command: KEEPWARM_BEFEHL }, async ($, e) => ({ text: await kwBefehl($, String(e.args ?? ''), kw) }))
+
+  // Kompaktierung ersetzt den Verlauf: der Cache ist danach ohnehin neu, ein Ping würde nur Neuaufbau bezahlen.
+  on('session.compact', async ($, e, next) => {
+    const r = await next(e)
+    if (!e.agentId && e.trigger !== 'precompute' && !('skip' in r && r.skip) && (await read($, keepwarm))?.aktiv) {
+      await kwBeenden($, 'Verlauf wurde kompaktiert')
+    }
+    return r
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -410,6 +683,13 @@ export const register: Register = (on, options) => {
       } catch {
         // nur für die Kaltstart-Prüfung nach /resume
       }
+      // Jede echte Antwort setzt den Takt neu und überholt einen laufenden Ping.
+      kwGen++
+      kwVersuche = 0
+      if ((await read($, keepwarm))?.aktiv) {
+        await update($, keepwarm, z => (z ? { ...z, wiederholung: 0 } : z))
+        await kwPlanen($, kw).catch(() => undefined)
+      }
     }
     void meldenStill($)
     return next(e)
@@ -431,7 +711,9 @@ export const register: Register = (on, options) => {
     const andere = andereText(alleSitzungen.filter(s => s.id !== id), now)
     const hauptModell = alleSitzungen.find(s => s.id === id)?.modell ?? 'opus-5-5'
 
-    if (laufend.length === 0 && !cacheZeigen && !andere) return darunter
+    const kwStand = await read($, keepwarm)
+    const kwText = keepwarmText(kwStand, now, await read($, letzteAntwort), cacheMinuten)
+    if (laufend.length === 0 && !cacheZeigen && !andere && !kwText) return darunter
 
     const { Box, Button, Text } = $.ui.resolve(e)
     const zeigen = () => void $.ui.open({ id: BEREICH, title: 'Agent-Radar' })
@@ -458,7 +740,7 @@ export const register: Register = (on, options) => {
         <Text color={rest! <= 0 ? 'red' : 'yellow'} wrap="truncate-end">
           {rest! <= 0
             ? `Cache kalt · Kontext ${tokens(ktx)}: der nächste Prompt kostet ≈ ${kosten} $ Neuaufbau — eine frische Sitzung (/clear) ist günstiger.`
-            : `Cache warm noch ${rest} min · Kontext ${tokens(ktx)}: nach einer Pause kostet der nächste Prompt ≈ ${kosten} $. Pause? Erst Stand sichern, dann /clear.`}
+            : `Cache warm noch ${rest} min · Kontext ${tokens(ktx)}: nach einer Pause kostet der nächste Prompt ≈ ${kosten} $. Pause? Erst Stand sichern, dann /clear${kwStand?.aktiv ? '.' : ' — oder /keepwarm 1h.'}`}
         </Text>
         {rest! > 0 && <Button key="radar-sichern" label="Stand sichern" onPress={() => void standSichern($).catch(() => undefined)} />}
       </Box>
@@ -476,6 +758,9 @@ export const register: Register = (on, options) => {
           </Box>
         )}
         {cacheZeile}
+        {kwText && (
+          <Text key="radar-keepwarm" color={kwStand?.aktiv ? 'green' : 'yellow'} wrap="truncate-end">{kwText}</Text>
+        )}
       </Box>
     )
   })

@@ -1,7 +1,7 @@
 {
   "name": "agent-radar",
-  "version": "0.3.1",
-  "description": "Alle Claude-Code-Sitzungen und Subagents auf einen Blick, Kaltstart-Wächter gegen teure Cache-Neuaufbauten, Modellwahl-Pflicht für Subagents, Such-Agents auf Haiku.",
+  "version": "0.4.0",
+  "description": "Alle Claude-Code-Sitzungen und Subagents auf einen Blick, Kaltstart-Wächter gegen teure Cache-Neuaufbauten, Keepwarm (Cache in der Pause per Mini-Ping warm halten), Modellwahl-Pflicht für Subagents, Such-Agents auf Haiku.",
   "author": {
     "name": "Fabio Brogno"
   },
@@ -41,6 +41,12 @@
       "title": "Kaltstart-Schwelle (Tausend Tokens)",
       "description": "Ab dieser Kontextgröße fragt der Wächter nach und warnt vor Pausen.",
       "default": 200
+    },
+    "keepwarm_max_stunden": {
+      "type": "number",
+      "title": "Keepwarm: Höchstdauer (Stunden)",
+      "description": "Längste Frist, die /keepwarm annimmt; längere Angaben werden auf diesen Wert gesetzt.",
+      "default": 4
     },
     "modell_pflicht": {
       "type": "boolean",

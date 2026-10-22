@@ -87,6 +87,6 @@ test('Befehl heißt /radar; wird die Registrierung abgelehnt, läuft der Start t
   on('ui.log', () => ({ value: undefined }) as any)
   on('command.register', (_$: any, e: any) => { registriert.push(e.name); return { deny: 'refused: it is a built-in' } as any })
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work/app' } as any)
-  expect(registriert).toEqual(['radar'])
+  expect(registriert).toEqual(['radar', 'keepwarm'])
   expect(store.has('radar:eigene')).toBe(true)
 })
