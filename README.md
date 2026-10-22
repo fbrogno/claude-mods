@@ -53,7 +53,7 @@ Alle Claude-Code-Sitzungen und Subagents auf einen Blick, plus Wächter gegen di
   einen Knopf „Stand sichern“ (startet `/handoff`, falls vorhanden). Danach `/clear`, und nach der Pause geht es billig
   weiter.
 - **Keepwarm:** `/keepwarm 2h` (auch `45m`, `1h30m`) hält den Prompt-Cache in einer Pause warm: Kurz bevor er abläuft
-  (`cache_minuten` − 10 min, also nach 50 min Leerlauf), schickt der Mod einen Mini-Ping per Fork über den Verlauf. Der
+  (`cache_minuten` − min(10 min, ein Fünftel), also nach 50 min Leerlauf), schickt der Mod einen Mini-Ping per Fork über den Verlauf. Der
   nächste echte Prompt liest den Cache dann nur, statt ihn teuer neu zu schreiben. `/keepwarm aus` beendet, `/keepwarm`
   allein zeigt den Stand. Das Band zeigt eine Zeile („Keepwarm: noch 1 h 20 min · Ping in 32 min · 2 Pings ≈ 0,62 $“).
   Es endet von selbst bei Fristende, kaltem Ping, `/clear`, Kompaktierung oder Sitzungsende; bei 429/5xx gibt es bis zu
