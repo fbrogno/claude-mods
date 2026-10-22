@@ -29,14 +29,19 @@ test('Deckel: Überschreitung wird auf das Maximum gesetzt', () => {
 test('Warm-Erkennung: gelesen > 0 und geschrieben < 10 % des Gelesenen', () => {
   expect(istWarm(warm)).toBe(true)
   expect(istWarm(kalt)).toBe(false)
-  expect(istWarm({ cache_read_input_tokens: 1000, cache_creation_input_tokens: 100 })).toBe(false)
-  expect(istWarm({ cache_read_input_tokens: 1000, cache_creation_input_tokens: 99 })).toBe(true)
+  const u = (input: number, lesen: number, schreiben: number) => ({ input_tokens: input, cache_read_input_tokens: lesen, cache_creation_input_tokens: schreiben })
+  expect(istWarm(u(0, 1000, 100))).toBe(false)
+  expect(istWarm(u(0, 1000, 99))).toBe(true)
+  // ungecachte Eingabe zählt mit
+  expect(istWarm(u(60, 1000, 50))).toBe(false)
+  expect(istWarm(u(40, 1000, 50))).toBe(true)
 })
 
 test('Takt: Ping bei letzte Antwort + (cache_minuten − 10 min)', () => {
   expect(pingZeit(JETZT, 60)).toBe(JETZT + 50 * MIN)
-  expect(pingZeit(JETZT, 30)).toBe(JETZT + 20 * MIN)
-  expect(pingZeit(JETZT, 5)).toBe(JETZT + MIN)
+  // Vorlauf relativ: min(10 min, cache_minuten / 5)
+  expect(pingZeit(JETZT, 30)).toBe(JETZT + 24 * MIN)
+  expect(pingZeit(JETZT, 5)).toBe(JETZT + 4 * MIN)
 })
 
 test('Retry-Grenze: höchstens 3, Backoff 1/2/4 min, nur vor TTL − 1 min und Frist', () => {
@@ -79,6 +84,7 @@ test('Band-Text: aktiv, wartend, abgebrochen', () => {
 // ---- Ablauf mit Attrappen -------------------------------------------------------------------------
 
 type Antwort = any
+const MSGS = [{ role: 'user', text: 'hi', toolUses: [], handle: 'h1' }] as any
 
 function stubs(on: any, opts: { fork: Antwort[]; letzteVorMin?: number; haengt?: boolean }) {
   const store = new Map<string, unknown>()
@@ -95,12 +101,15 @@ function stubs(on: any, opts: { fork: Antwort[]; letzteVorMin?: number; haengt?:
   on('session.id', () => ({ value: 'eigene' }))
   on('session.cwd', () => ({ value: '/work/app' }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
-  on('session.messages', () => ({ value: [] }))
+  on('session.messages', () => ({ value: MSGS }))
   on('session.usage', () => ({ value: { startedAt: JETZT, context: { tokens: 300_000, window: 1_000_000 }, rateLimits: [] } }))
   on('command.register', () => ({ value: undefined }) as any)
   on('agent.list', () => ({ value: [] }))
   on('classic.SessionStart', () => ({}))
   on('ui.toast', (_$: any, e: any) => { toasts.push(e.text); return { value: undefined } as any })
+  on('prompt.submit', (_$: any, e: any) => ({ text: e.text }))
+  on('session.end', () => ({ sessionId: 'eigene' }) as any)
+  on('session.compact', () => ({ messages: MSGS }) as any)
   on('turn.complete', () => ({ text: 'ok' }) as any)
   on('model.fork', (_$: any, e: any) => {
     forks.push(e.prompt)
@@ -190,7 +199,7 @@ test('Veralteter Ping: Antwort während des Pings verwirft das Ergebnis', async 
   await $.session.start(START)
   await befehl($, '3h')
   const lauf = s.uhr.advance(51 * MIN)
-  await new Promise(r => setTimeout(r, 20))
+  await warteAuf(() => s.forks.length === 1)
   // echte Antwort kommt, während der Ping noch unterwegs ist
   await $.turn.complete({ reason: 'answer', answer: 'ok', durationMs: 5, isAborted: false, turnId: 't1', usage: { ...warm, model: 'claude-opus-5-5' } } as any)
   s.hang.freigeben(ok(kalt)) // würde als „kalt“ abbrechen, wird aber verworfen
@@ -224,6 +233,100 @@ test('/clear beendet Keepwarm', async ($, on) => {
   await befehl($, '3h')
   await ($ as any).classic.SessionStart({ source: 'clear' })
   expect(s.toasts[0]).toContain('/clear')
+  await s.uhr.advance(120 * MIN)
+  expect(s.forks.length).toBe(0)
+})
+
+async function warteAuf(bedingung: () => boolean) {
+  for (let i = 0; i < 500 && !bedingung(); i++) await new Promise(r => setTimeout(r, 10))
+  expect(bedingung()).toBe(true)
+}
+
+const abbruch = { reason: 'aborted', answer: '', durationMs: 5, isAborted: true, turnId: 't2' } as any
+
+test('Abgebrochener Turn ohne usage setzt keinen Zeitstempel (Cache wurde nicht berührt)', async ($, on) => {
+  const s = stubs(on, { fork: [ok(warm)] })
+  await $.session.start(START)
+  await befehl($, '3h')
+  await s.uhr.advance(40 * MIN)
+  await $.turn.complete(abbruch)
+  expect(s.store.get('antwort:eigene')).toBe(JETZT) // unverändert
+  await s.uhr.advance(10 * MIN) // Ping bleibt bei T0 + 50 min
+  expect(s.forks.length).toBe(1)
+  expect(s.store.get('antwort:eigene')).toBe(JETZT + 50 * MIN)
+})
+
+test('Abgebrochener Turn nach Cache-Ablauf beendet Keepwarm statt später kalt zu pingen', async ($, on) => {
+  const s = stubs(on, { fork: [], letzteVorMin: 20 })
+  await $.session.start(START)
+  await befehl($, '3h')
+  await s.uhr.advance(45 * MIN) // 65 min nach der letzten Antwort, Ping wäre bei 50 min gewesen
+  s.toasts.length = 0
+  await $.turn.complete(abbruch)
+  expect(s.forks.length).toBeLessThanOrEqual(1)
+  const status: any = await befehl($, '')
+  expect(String(status.text)).toContain('beendet')
+})
+
+test('wartet + Frist verstrichen: Takt beendet mit „Frist erreicht“', async ($, on) => {
+  const s = stubs(on, { fork: [{ isAnswered: false, reason: 'nothing-to-fork' }] })
+  await $.session.start(START)
+  await befehl($, '3h')
+  await s.uhr.advance(51 * MIN)
+  expect(s.toasts).toEqual([])
+  await s.uhr.advance(3 * 3_600_000)
+  expect(s.toasts.length).toBe(1)
+  expect(s.toasts[0]).toContain('Frist erreicht')
+})
+
+test('Läuft ein Turn, wird nicht gepingt; nach der Antwort läuft der Takt neu', async ($, on) => {
+  const s = stubs(on, { fork: [ok(warm)] })
+  await $.session.start(START)
+  await befehl($, '3h')
+  await $.prompt.submit({ text: 'mach weiter', asUser: true } as any)
+  await s.uhr.advance(52 * MIN)
+  expect(s.forks.length).toBe(0)
+  await $.turn.complete({ reason: 'answer', answer: 'ok', durationMs: 5, isAborted: false, turnId: 't3', usage: { ...warm, model: 'claude-opus-5-5' } } as any)
+  await s.uhr.advance(51 * MIN)
+  expect(s.forks.length).toBe(1)
+})
+
+test('/clear realistisch: erst session.end, dann SessionStart clear, ein Toast mit Grund', async ($, on) => {
+  const s = stubs(on, { fork: [] })
+  await $.session.start(START)
+  await befehl($, '3h')
+  await $.session.end({ reason: 'clear' } as any)
+  expect(s.toasts.length).toBe(1)
+  expect(s.toasts[0]).toContain('/clear')
+  await ($ as any).classic.SessionStart({ source: 'clear' })
+  expect(s.toasts.length).toBe(1)
+  await s.uhr.advance(120 * MIN)
+  expect(s.forks.length).toBe(0)
+})
+
+test('aus + neu während ein Ping unterwegs ist: kein Doppelping, warmer Ping zählt als Cache-Berührung', async ($, on) => {
+  const s = stubs(on, { fork: [], haengt: true })
+  await $.session.start(START)
+  await befehl($, '3h')
+  const lauf = s.uhr.advance(50 * MIN + 1000)
+  await warteAuf(() => s.forks.length === 1)
+  await befehl($, 'aus')
+  await befehl($, '2h')
+  s.hang.freigeben(ok(warm))
+  await lauf
+  await new Promise(r => setTimeout(r, 20))
+  await s.uhr.advance(5 * MIN)
+  expect(s.forks.length).toBe(1)
+  expect(Number(s.store.get('antwort:eigene'))).toBeGreaterThan(JETZT)
+})
+
+test('Kompaktierung beendet Keepwarm', async ($, on) => {
+  const s = stubs(on, { fork: [] })
+  await $.session.start(START)
+  await befehl($, '3h')
+  await ($ as any).session.compact({ trigger: 'manual', messages: MSGS })
+  expect(s.toasts.length).toBe(1)
+  expect(s.toasts[0]).toContain('kompaktiert')
   await s.uhr.advance(120 * MIN)
   expect(s.forks.length).toBe(0)
 })

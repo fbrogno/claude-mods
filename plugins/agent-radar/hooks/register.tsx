@@ -91,6 +91,10 @@ export function cacheRest(letzte: number | null, jetztMs: number, minuten: numbe
 const MIN_MS = 60_000
 /** So viele Minuten vor Ablauf des Caches geht der Ping raus. */
 export const PING_VORLAUF_MIN = 10
+/** Vorlauf relativ zur Cache-Dauer: höchstens 10 min, bei kurzen Caches ein Fünftel. */
+export function vorlaufMin(cacheMinuten: number): number {
+  return Math.min(PING_VORLAUF_MIN, cacheMinuten / 5)
+}
 /** Ein Ping muss spätestens so lange vor Ablauf des Caches landen. */
 export const PING_RESERVE_MS = MIN_MS
 export const MAX_WIEDERHOLUNGEN = 3
@@ -120,16 +124,16 @@ export function langDauer(ms: number): string {
   return m % 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m / 60} h`
 }
 
-/** Zeitpunkt des Pings: cache_minuten − 10 min nach der letzten Antwort (mindestens 1 min). */
+/** Zeitpunkt des Pings: cache_minuten − min(10 min, cache_minuten / 5) nach der letzten Antwort (mindestens 1 min). */
 export function pingZeit(letzte: number, cacheMinuten: number): number {
-  return letzte + Math.max(cacheMinuten - PING_VORLAUF_MIN, 1) * MIN_MS
+  return letzte + Math.max(cacheMinuten - vorlaufMin(cacheMinuten), 1) * MIN_MS
 }
 
 type PingUsage = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
 
-/** Warm: der Ping hat den Cache gelesen und nur seine eigene Nachricht geschrieben (< 10 % des Gelesenen). */
-export function istWarm(u: Pick<PingUsage, 'cache_read_input_tokens' | 'cache_creation_input_tokens'>): boolean {
-  return u.cache_read_input_tokens > 0 && u.cache_creation_input_tokens < 0.1 * u.cache_read_input_tokens
+/** Warm: der Ping hat den Cache gelesen; Schreiben plus ungecachte Eingabe (seine eigene Nachricht) < 10 % des Gelesenen. */
+export function istWarm(u: Pick<PingUsage, 'input_tokens' | 'cache_read_input_tokens' | 'cache_creation_input_tokens'>): boolean {
+  return u.cache_read_input_tokens > 0 && u.cache_creation_input_tokens + u.input_tokens < 0.1 * u.cache_read_input_tokens
 }
 
 /** Kosten eines Pings in $ (Näherung: Eingabe = 10 × Lesepreis, Ausgabe = 5 × Eingabe). */
@@ -356,6 +360,8 @@ let kwImFlug = false
 /** Generationszähler: jede echte Antwort, jedes Beenden und jeder Neustart macht laufende Pings ungültig. */
 let kwGen = 0
 let kwVersuche = 0
+/** Ein Haupt-Turn läuft (Prompt gesendet, noch keine Antwort): dann hält er den Cache selbst warm. */
+let kwTurnLaeuft = false
 
 type KwConfig = { cacheMinuten: number; maxStunden: number }
 
@@ -411,6 +417,16 @@ async function kwPlanen($: EngineInterface, cfg: KwConfig) {
   await update($, jetzt, () => now)
 }
 
+/** Der Cache wurde zum Zeitpunkt `t` berührt (Antwort oder warmer Ping): Atom und Store merken ihn. */
+async function kwZeitstempel($: EngineInterface, t: number) {
+  await update($, letzteAntwort, () => t)
+  try {
+    await $.store.set(ANTWORT + (await $.session.id()), t)
+  } catch {
+    // nur für die Kaltstart-Prüfung nach /resume
+  }
+}
+
 async function kwPing($: EngineInterface, cfg: KwConfig) {
   kwTimer = null
   const k = await read($, keepwarm)
@@ -424,6 +440,11 @@ async function kwPing($: EngineInterface, cfg: KwConfig) {
   if (now >= letzte + cfg.cacheMinuten * MIN_MS - PING_RESERVE_MS) return kwBeenden($, 'Cache war schon abgelaufen')
   // Eine Antwort hat die Uhr verschoben: neu planen statt zu früh zu pingen.
   if (now < pingZeit(letzte, cfg.cacheMinuten) - 1000 && !kwVersuche) return kwPlanen($, cfg)
+  // Läuft ein Turn, hält er den Cache selbst warm: später nachsehen, nicht mitten hinein pingen.
+  if (kwTurnLaeuft) {
+    kwTimer = $.clock.after(30_000, () => void kwPing($, cfg).catch(() => undefined))
+    return
+  }
   if (kwImFlug) return // nach dem letzten await gesetzt: nie zwei Pings gleichzeitig
   kwImFlug = true
   const gesendet = await $.model.fork({ prompt: PING_PROMPT }).then(
@@ -433,7 +454,12 @@ async function kwPing($: EngineInterface, cfg: KwConfig) {
   kwImFlug = false
   const at = await $.clock.now()
   // Nach dem letzten await geprüft: Antwort, /clear, Kompaktierung oder Aus haben den Ping überholt.
-  if (gen !== kwGen) return kwPlanen($, cfg)
+  if (gen !== kwGen) {
+    // Verworfen, aber ein warmer Ping hat den Cache trotzdem berührt: Zeitstempel setzen, sonst käme sofort ein zweiter.
+    const r = 'reply' in gesendet ? gesendet.reply : null
+    if (r && r.isAnswered && istWarm(r.usage) && (await read($, keepwarm))?.aktiv) await kwZeitstempel($, at)
+    return kwPlanen($, cfg)
+  }
   if ('err' in gesendet) return kwBeenden($, `Ping fehlgeschlagen (${String((gesendet.err as Error)?.message ?? gesendet.err).slice(0, 80)})`)
   const reply = gesendet.reply
   if (reply === null || reply === undefined) return kwBeenden($, 'Ping nicht gesendet (Cache vermutlich schon kalt)')
@@ -464,12 +490,7 @@ async function kwPing($: EngineInterface, cfg: KwConfig) {
   }
   // Der Ping hat den Cache verlängert: sonst warnt der Kaltstart-Wächter fälschlich.
   kwVersuche = 0
-  await update($, letzteAntwort, () => at)
-  try {
-    await $.store.set(ANTWORT + (await $.session.id()), at)
-  } catch {
-    // nur für die Kaltstart-Prüfung
-  }
+  await kwZeitstempel($, at)
   await kwPlanen($, cfg)
 }
 
@@ -534,6 +555,9 @@ export const register: Register = (on, options) => {
         const k = await read($, keepwarm)
         if (k?.aktiv && !k.wartet) await kwPlanen($, kw).catch(() => undefined)
       }
+      // Wartet auf eine Antwort, die nicht kommt: Frist trotzdem einhalten.
+      const w = await read($, keepwarm)
+      if (w?.aktiv && w.wartet && (await $.clock.now()) >= w.frist) await kwBeenden($, 'Frist erreicht')
     })
     return r
   })
@@ -552,10 +576,13 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
-    kwGen++
-    kwTimerStoppen()
     try {
-      await update($, keepwarm, () => null)
+      if (e.reason === 'clear' && (await read($, keepwarm))?.aktiv) await kwBeenden($, 'Sitzung mit /clear geleert')
+      else {
+        kwGen++
+        kwTimerStoppen()
+        await update($, keepwarm, () => null)
+      }
     } catch {
       // beim Beenden nie stören
     }
@@ -622,6 +649,7 @@ export const register: Register = (on, options) => {
     }
 
     arbeitet = true
+    if (text && !text.startsWith('/')) kwTurnLaeuft = true
     seit = await $.clock.now()
     if (text && !text.startsWith('/')) aufgabe = aufgabeAus(text)
     void meldenStill($)
@@ -676,14 +704,11 @@ export const register: Register = (on, options) => {
       }))
     } else {
       arbeitet = false
+      kwTurnLaeuft = false
       seit = now
-      await update($, letzteAntwort, () => now)
-      try {
-        await $.store.set(ANTWORT + (await $.session.id()), now)
-      } catch {
-        // nur für die Kaltstart-Prüfung nach /resume
-      }
-      // Jede echte Antwort setzt den Takt neu und überholt einen laufenden Ping.
+      // Ohne usage (Abbruch, API-Fehler) hat kein Request den Cache berührt: kein neuer Zeitstempel.
+      if (e.usage) await kwZeitstempel($, now)
+      // Jede Antwort überholt einen laufenden Ping; kwPlanen beendet Keepwarm, wenn der Cache schon abgelaufen ist.
       kwGen++
       kwVersuche = 0
       if ((await read($, keepwarm))?.aktiv) {
