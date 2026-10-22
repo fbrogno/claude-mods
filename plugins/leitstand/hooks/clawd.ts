@@ -131,10 +131,15 @@ export const BREITE = 11
 /** Zellen-Zeilen eines Männchens (8 Pixelzeilen). */
 export const HOEHE = 4
 
+/**
+ * Hüte: drei Pixelzeilen über dem Kopf. REGEL: die unterste Hutzeile (Index 2) ist nie leer und sitzt unmittelbar auf
+ * der obersten Kopfzeile des Körpers (Pixelzeile 3). Beide fallen in dieselbe Zellzeile (Pixelzeile 2 oben, 3 unten),
+ * also auch dann zusammen, wenn das Terminal Zeilenabstand hat: der Hut schwebt nie über dem Kopf.
+ */
 const HUT_KARTEN: Record<HutName, { farben: Record<string, string>; zeilen: [string, string, string] }> = {
   cowboy: { farben: { H: '#8B5A2B', D: '#5C3A1A' }, zeilen: ['....HHH....', '...HDDDH...', 'HHHHHHHHHHH'] },
   party: { farben: { P: '#F472B6', Y: '#FDE047' }, zeilen: ['.....Y.....', '....PYP....', '...PPPPP...'] },
-  krone: { farben: { G: '#FACC15' }, zeilen: ['...G.G.G...', '...GGGGG...', '...........'] },
+  krone: { farben: { G: '#FACC15' }, zeilen: ['...........', '...G.G.G...', '...GGGGG...'] },
   cap: { farben: { C: '#3B82F6' }, zeilen: ['...CCCC....', '..CCCCCCC..', '..CCCCCCCCC'] },
   zauberer: { farben: { W: '#7C3AED', S: '#FDE047' }, zeilen: ['.....W.....', '....WSW....', '..WWWWWWW..'] },
   muetze: { farben: { R: '#EF4444', w: '#F5F5F5' }, zeilen: ['....RRR....', '..RRRRRRR..', '..RwRwRwR..'] },
@@ -166,7 +171,7 @@ export type MannOptionen = {
   zustand: MannZustand
   /** Bildzähler der Animation (4 Bilder je Sekunde). */
   tick: number
-  /** Bilder seit dem Ende (für „fertig": die ersten beiden sind der Hüpfer). */
+  /** Bilder seit dem Ende (für „fertig": die ersten beiden sind der Sprung). */
   phase?: number
 }
 
@@ -229,9 +234,14 @@ export function pixel(o: MannOptionen): Px[][] {
     setze(4, [3, 7], koerper)
     setze(5, [3, 7], FARBEN.auge)
   }
-  if (!pose.hoch) return g
-  // Hüpfer: alles eine Pixelzeile höher; die oberste Hutzeile fällt weg, unten bleibt der Boden leer.
-  return [...g.slice(1), Array<Px>(BREITE).fill(null)]
+  // Sprung: Arme hoch, Beine eingezogen. Kein Pixelversatz des ganzen Männchens: eine Pixelzeile höher hätte Hut und Kopf
+  // in zwei Zellzeilen getrennt (bei Zeilenabstand ein sichtbarer Spalt).
+  if (pose.hoch) {
+    setze(5, [0, 1, 9, 10], null)
+    setze(4, [0, 1, 9, 10], koerper)
+    g[7] = Array.from('...B...B...').map(c => (c === 'B' ? koerper : null))
+  }
+  return g
 }
 
 /** Die vier Textzeilen aus je zwei Pixelzeilen; Hintergrund = Terminal (transparent). */

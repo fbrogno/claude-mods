@@ -1,5 +1,5 @@
 /**
- * Leitstand 0.2: die Formen der Daten, die die Mod hält (Zustand im Host) und in
+ * Leitstand 0.3: die Formen der Daten, die die Mod hält (Zustand im Host) und in
  * ~/.claude-leitstand/sitzungen/<sessionId>.json ablegt.
  *
  * Grundsatz: nur gemessene Werte stehen als Zahl. Was die Mod schätzt, ist in den
@@ -55,13 +55,15 @@ export type LeitstandLimit = {
   reset: number | null
 }
 
-/** Inhalt von ~/.claude-leitstand/sitzungen/<sessionId>.json (Format 2). */
+/** Inhalt von ~/.claude-leitstand/sitzungen/<sessionId>.json (Format 2, seit 0.3 mit `titel`). */
 export type LeitstandSitzung = {
   v: 2
   sessionId: string
   /** Name des Konfig-Ordners (.claude, .claude-firma2). */
   profil: string
   projekt: string
+  /** Titel der Sitzung (aus den classic-Ereignissen `UserPromptSubmit`/`SessionStart`), auf 40 Zeichen gekürzt; null, solange der Host keinen nannte. */
+  titel: string | null
   /** Modell der Hauptschleife als Bezeichnung („opus 5.5"). */
   modell: string
   kontextProzent: number | null
@@ -81,6 +83,7 @@ export type LeitstandSitzung = {
   kosten: number | null
   /** Davon heute angefallen (Kosten minus Stand zu Tagesbeginn); null ohne Messung. */
   kostenHeute: number | null
+  /** Die Limits des Kontos (kontoweit) und der Stand der Messung: wann die Werte sich zuletzt änderten bzw. erstmals gesehen wurden. */
   limits: LeitstandLimit[]
   limitsZeit: number | null
   letzteAntwort: number | null
@@ -92,8 +95,6 @@ export type LeitstandSitzung = {
   /** Zeitpunkt des Sitzungsendes; null solange sie läuft. */
   beendet: number | null
   herz: number
-  /** Nur beim Lesen: Datei der Mod 0.1 (ohne Zähler und Tageskosten). */
-  alt?: true
 }
 
 export type LeitstandAufruf = { agentId?: string; werkzeug: string; ziel: string; start: number }
@@ -102,6 +103,11 @@ export type LeitstandAufruf = { agentId?: string; werkzeug: string; ziel: string
 export type LeitstandEigen = {
   /** Wurde der Stand schon aus einer vorhandenen Datei derselben Sitzung ergänzt? */
   geladen: boolean
+  /** Titel der Sitzung, wie der Host ihn zuletzt nannte (nur gelesen, nie verändert). */
+  titel: string | null
+  /** Zuletzt gelesene Limits und wann sie sich zuletzt geändert haben (= Stand der Messung). */
+  limits: LeitstandLimit[]
+  limitsZeit: number | null
   tag: string
   zaehlSeit: number | null
   gesamt: LeitstandZaehler
@@ -136,9 +142,9 @@ export type LeitstandZiel = { art: 'sitzung'; id: string } | { art: 'agent'; id:
 declare module 'claude-code' {
   interface PluginState {
     leitstand: {
-      eigen2: LeitstandEigen
+      eigen3: LeitstandEigen
       /** Alle Sitzungen von heute (laufende und beendete), wie zuletzt gelesen. */
-      alle2: LeitstandSitzung[]
+      alle3: LeitstandSitzung[]
       jetzt: number
       offen: boolean
       /** Gewählte Sitzung (Umfang von Kacheln, Modellen, Crew); null = alle. */

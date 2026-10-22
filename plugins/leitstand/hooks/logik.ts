@@ -23,6 +23,12 @@ export const BRAUCHT_NACH_MS = 4000
 /** Zählbeginn gilt als „später" als der Sitzungsbeginn ab dieser Lücke. */
 export const ZAEHL_LUECKE_MS = 60_000
 export const ZIEL_MAX = 60
+/** Der Sitzungstitel wird auf so viele Zeichen gekürzt. */
+export const TITEL_MAX = 40
+/** Dateien der Mod 0.1 (ohne Format 2) werden ignoriert und gelöscht, wenn ihr Herzschlag so alt ist. */
+export const ALT_LOESCH_MS = 10 * 60_000
+/** Limits gelten bis zu dieser Zeit als frisch gemessen; danach steht „Stand HH:MM" dahinter. */
+export const LIMIT_FRISCH_MS = 15 * 60_000
 
 // ---- Texte -----------------------------------------------------------------------------------------
 
@@ -34,6 +40,39 @@ export function kuerzen(text: string, max = ZIEL_MAX): string {
 export function basename(pfad: string): string {
   const teile = pfad.split(/[\\/]/).filter(Boolean)
   return teile[teile.length - 1] ?? ''
+}
+
+/** Titel der Sitzung aus dem Host: Leerraum glätten, auf 40 Zeichen kürzen; null, wenn keiner da ist. */
+export function titelBereinigen(roh: unknown): string | null {
+  if (typeof roh !== 'string') return null
+  const t = kuerzen(roh, TITEL_MAX)
+  return t ? t : null
+}
+
+/** Ordnername des Host-Verlaufs zu einem Arbeitsordner: jedes Zeichen außer Buchstaben und Ziffern wird „-". */
+export function projektOrdner(pfad: string): string {
+  return pfad.replace(/[^A-Za-z0-9]/g, '-')
+}
+
+/** Aus der Ausgabe von grep (`"aiTitle":"…"` je Zeile) den gültigen Titel: der letzte `customTitle`, sonst der letzte `aiTitle`. */
+export function titelAusTreffern(ausgabe: string): string | null {
+  let ai: string | null = null
+  let eigener: string | null = null
+  for (const zeile of ausgabe.split('\n')) {
+    const m = zeile.match(/^"(customTitle|aiTitle)":("(?:[^"\\]|\\.)*")$/)
+    if (!m) continue
+    let wert: unknown
+    try {
+      wert = JSON.parse(m[2]!)
+    } catch {
+      continue
+    }
+    const t = titelBereinigen(wert)
+    if (!t) continue
+    if (m[1] === 'customTitle') eigener = t
+    else ai = t
+  }
+  return eigener ?? ai
 }
 
 /** Wörter der userConfig `ausblenden`, klein, ohne Leere. */
@@ -48,6 +87,11 @@ export function ausblendenListe(roh: unknown): string[] {
 export function istVersteckt(cwd: string, woerter: string[]): boolean {
   const c = cwd.toLowerCase()
   return woerter.some(w => c.includes(w))
+}
+
+/** Privat ist eine Sitzung auch, wenn ihr Titel eines der Wörter nennt (der Titel kann erst nach dem ersten Prompt da sein). */
+export function istSitzungVersteckt(cwd: string, titel: string | null, woerter: string[]): boolean {
+  return istVersteckt(cwd, woerter) || (titel !== null && istVersteckt(titel, woerter))
 }
 
 // ---- Zahlen, deutsch formatiert --------------------------------------------------------------------
@@ -417,6 +461,9 @@ export function sichtbareAgents(s: LeitstandSitzung, jetzt: number): LeitstandAg
 export function leererEigenStand(): LeitstandEigen {
   return {
     geladen: false,
+    titel: null,
+    limits: [],
+    limitsZeit: null,
     tag: '',
     zaehlSeit: null,
     gesamt: leerZ(),
@@ -494,11 +541,12 @@ const ZUSTAENDE: readonly LeitstandZustand[] = ['arbeitet', 'wartet', 'braucht',
 
 /**
  * Eine gelesene Herzschlag-Datei prüfen und in eine saubere Form bringen; null bei Unbrauchbarem.
- * Dateien der Mod 0.1 (ohne Zähler) werden als `alt` angenommen: sie zeigen sich in der Liste, zählen aber nicht in „heute".
+ * Nur Format 2 zählt: Dateien der Mod 0.1 (ohne Zähler) werden gar nicht mehr angenommen (siehe `alteDateiHerz`).
  */
 export function pruefeSitzung(roh: unknown): LeitstandSitzung | null {
   if (!roh || typeof roh !== 'object') return null
   const s = roh as Record<string, unknown>
+  if (s.v !== 2) return null
   const id = str(s.sessionId, 80)
   const herz = zahl(s.herz)
   if (!id || herz === null) return null
@@ -507,35 +555,45 @@ export function pruefeSitzung(roh: unknown): LeitstandSitzung | null {
   if (s.modelle && typeof s.modelle === 'object') {
     for (const [k, v] of Object.entries(s.modelle as Record<string, unknown>).slice(0, 12)) modelle[kuerzen(k, 16)] = pruefeZ(v)
   }
-  const neu = s.v === 2
   const zustandRoh = typeof s.zustand === 'string' && (ZUSTAENDE as readonly string[]).includes(s.zustand) ? (s.zustand as LeitstandZustand) : 'wartet'
   return {
     v: 2,
     sessionId: id,
     profil: str(s.profil, 40, '.claude'),
     projekt: str(s.projekt, 40, '?'),
+    titel: titelBereinigen(s.titel),
     modell: str(s.modell, 16, '?'),
     kontextProzent: zahl(s.kontextProzent),
     gestartet: zahl(s.gestartet),
-    zaehlSeit: neu ? zahl(s.zaehlSeit) : null,
+    zaehlSeit: zahl(s.zaehlSeit),
     tag: str(s.tag, 10),
-    gesamt: neu ? pruefeZ(s.gesamt) : leerZ(),
-    haupt: neu ? pruefeZ(s.haupt) : leerZ(),
-    modelle: neu ? modelle : {},
+    gesamt: pruefeZ(s.gesamt),
+    haupt: pruefeZ(s.haupt),
+    modelle,
     kosten: zahl(s.kosten),
-    kostenHeute: neu ? zahl(s.kostenHeute) : null,
+    kostenHeute: zahl(s.kostenHeute),
     limits: pruefeLimits(s.limits),
     limitsZeit: zahl(s.limitsZeit),
     letzteAntwort: zahl(s.letzteAntwort),
     zustand: zustandRoh,
-    zustandSeit: zahl(s.zustandSeit) ?? zahl(s.seit) ?? herz,
+    zustandSeit: zahl(s.zustandSeit) ?? herz,
     werkzeug: typeof s.werkzeug === 'string' ? str(s.werkzeug, 30) : null,
     ziel: str(s.ziel, ZIEL_MAX),
     agents,
     beendet: zahl(s.beendet),
     herz,
-    ...(neu ? {} : { alt: true as const }),
   }
+}
+
+/**
+ * Herzschlag einer Datei, die kein Format 2 hat (Mod 0.1 ohne Zähler), sonst null.
+ * Solche Dateien werden nie angezeigt oder gerechnet; ist ihr Herzschlag älter als `ALT_LOESCH_MS`, räumt der Leser sie weg.
+ */
+export function alteDateiHerz(roh: unknown): number | null {
+  if (!roh || typeof roh !== 'object') return null
+  const s = roh as Record<string, unknown>
+  if (s.v === 2 || typeof s.sessionId !== 'string') return null
+  return zahl(s.herz)
 }
 
 /** Dateiname aus der Sitzungs-ID (nur sichere Zeichen). */
@@ -550,42 +608,70 @@ export function brauchtSchreiben(zuletzt: { json: string; zeit: number } | null,
 
 // ---- Auswertung über Sitzungen ---------------------------------------------------------------------
 
+/** Hat die Sitzung heute etwas getan oder gekostet? Laufende zählen auch mit Agents, Arbeit oder Rückfrage. */
+export function hatInhalt(s: LeitstandSitzung, jetzt: number): boolean {
+  if (s.gesamt.anfragen > 0) return true
+  if ((s.kostenHeute ?? 0) > 0) return true
+  if (!istAktiv(s, jetzt)) return false
+  if (s.agents.length > 0) return true
+  const z = zustandJetzt(s, jetzt)
+  return z === 'arbeitet' || z === 'braucht'
+}
+
+export type Gruppen = {
+  /** (a) Aktiv und mit Inhalt: einzeln gelistet. */
+  aktiv: LeitstandSitzung[]
+  /** (b) Leer (keine Anfrage, keine Agents, keine Kosten): nur gezählt. */
+  leer: LeitstandSitzung[]
+  /** (c) Heute inaktiv oder beendet, mit Anfragen oder Kosten: gedimmt darunter. */
+  beendet: LeitstandSitzung[]
+}
+
+/** Die Sitzungen von heute in drei Gruppen; (a) mit den eigenen zuerst, (c) nach Kosten absteigend. */
+export function gruppiere(liste: LeitstandSitzung[], eigeneId: string, jetzt: number): Gruppen {
+  const aktiv: LeitstandSitzung[] = []
+  const leer: LeitstandSitzung[] = []
+  const beendet: LeitstandSitzung[] = []
+  for (const s of liste) {
+    if (!hatInhalt(s, jetzt)) leer.push(s)
+    else if (istAktiv(s, jetzt)) aktiv.push(s)
+    else beendet.push(s)
+  }
+  beendet.sort((a, b) => (b.kostenHeute ?? 0) - (a.kostenHeute ?? 0) || b.herz - a.herz)
+  return { aktiv: sortieren(aktiv, eigeneId, jetzt), leer, beendet }
+}
+
 export type Summen = {
-  /** Aktive Sitzungen (Herzschlag frisch, nicht beendet). */
+  /** Aktive Sitzungen mit Inhalt (Gruppe a): die Zahl der Kopfzeile. */
   aktiv: number
   agentsLaufen: number
-  /** Heutige Kosten (gemessen); null, wenn keine Sitzung einen Messwert hat. */
+  /** Heutige Kosten aller Sitzungen (gemessen); null, wenn keine Sitzung einen Messwert hat. */
   kostenHeute: number | null
-  /** Sitzungen im Umfang, deren Datei keine Zähler kennt (Mod 0.1). */
-  ohneZaehler: number
 }
 
 export function summen(liste: LeitstandSitzung[], jetzt: number): Summen {
   let kosten: number | null = null
-  let ohne = 0
   let aktiv = 0
   let laufen = 0
   for (const s of liste) {
-    if (s.alt) ohne++
-    else if (s.kostenHeute !== null) kosten = (kosten ?? 0) + s.kostenHeute
-    if (istAktiv(s, jetzt)) {
+    if (s.kostenHeute !== null) kosten = (kosten ?? 0) + s.kostenHeute
+    if (istAktiv(s, jetzt) && hatInhalt(s, jetzt)) {
       aktiv++
       laufen += s.agents.filter(a => a.stand === 'laeuft').length
     }
   }
-  return { aktiv, agentsLaufen: laufen, kostenHeute: kosten, ohneZaehler: ohne }
+  return { aktiv, agentsLaufen: laufen, kostenHeute: kosten }
 }
 
-/** Summe der Zähler über Sitzungen (ohne Mod-0.1-Dateien). */
+/** Summe der Zähler über Sitzungen. */
 export function zaehlerSumme(liste: LeitstandSitzung[]): LeitstandZaehler {
-  return liste.filter(s => !s.alt).reduce((z, s) => plusZ(z, s.gesamt), leerZ())
+  return liste.reduce((z, s) => plusZ(z, s.gesamt), leerZ())
 }
 
 /** Summe je Modell über Sitzungen. */
 export function modelleSumme(liste: LeitstandSitzung[]): Array<{ modell: string; z: LeitstandZaehler }> {
   const m = new Map<string, LeitstandZaehler>()
   for (const s of liste) {
-    if (s.alt) continue
     for (const [k, z] of Object.entries(s.modelle)) m.set(k, plusZ(m.get(k) ?? leerZ(), z))
   }
   return [...m.entries()]
@@ -597,29 +683,39 @@ export function modelleSumme(liste: LeitstandSitzung[]): Array<{ modell: string;
 export function zaehlBeginnNotiz(liste: LeitstandSitzung[], jetzt: number): number | null {
   let spaet: number | null = null
   for (const s of liste) {
-    if (s.alt) continue
     const l = zaehlLuecke(s.gestartet, s.zaehlSeit, jetzt)
     if (l !== null && (spaet === null || l > spaet)) spaet = l
   }
   return spaet
 }
 
-/** Rate-Limits: je Profil der jüngste Messwert unter den Sitzungen; abgelaufene Fenster (Reset vorbei) fallen weg. */
-export function limitsJeProfil(liste: LeitstandSitzung[], jetzt: number): Array<{ profil: string; limits: LeitstandLimit[]; zeit: number }> {
+export type ProfilLimits = { profil: string; kurz: string; limits: LeitstandLimit[]; zeit: number }
+
+/** Kurzes Kennzeichen eines Profils: „.claude" → „std", „.claude-zweit" → „zweit". */
+export function profilKurz(profil: string): string {
+  const k = profil.replace(/^\.?claude/i, '').replace(/^[-_.]+/, '')
+  return k ? kuerzen(k, 6) : 'std'
+}
+
+/**
+ * Rate-Limits gelten für das ganze Konto: je Profil zählt der jüngste Messstand unter ALLEN heutigen Dateien,
+ * ob die Sitzung läuft, ruht oder beendet ist. Abgelaufene Fenster fallen nicht weg (die Ansicht kennzeichnet sie).
+ */
+export function limitsJeProfil(liste: LeitstandSitzung[]): ProfilLimits[] {
   const best = new Map<string, LeitstandSitzung>()
   for (const s of liste) {
     if (s.limits.length === 0 || s.limitsZeit === null) continue
     const alt = best.get(s.profil)
-    if (!alt || (alt.limitsZeit ?? 0) < s.limitsZeit) best.set(s.profil, s)
+    if (!alt || (alt.limitsZeit ?? 0) < s.limitsZeit || ((alt.limitsZeit ?? 0) === s.limitsZeit && alt.herz < s.herz)) best.set(s.profil, s)
   }
   return [...best.values()]
-    .map(s => ({
-      profil: s.profil,
-      zeit: s.limitsZeit ?? 0,
-      limits: s.limits.filter(l => l.reset === null || l.reset > jetzt),
-    }))
-    .filter(p => p.limits.length > 0)
+    .map(s => ({ profil: s.profil, kurz: profilKurz(s.profil), zeit: s.limitsZeit ?? 0, limits: s.limits }))
     .sort((a, b) => a.profil.localeCompare(b.profil))
+}
+
+/** Gilt das Limit-Fenster noch (Reset in der Zukunft oder unbekannt)? */
+export function limitOffen(l: LeitstandLimit, jetzt: number): boolean {
+  return l.reset === null || l.reset > jetzt
 }
 
 /** Beschriftung eines Limit-Fensters: „5 h", „7 T", sonst die Art. */
@@ -628,4 +724,31 @@ export function limitName(art: string): string {
   if (art === 'seven_day') return '7 T'
   if (art === 'spend_limit') return 'Limit'
   return kuerzen(art.replace(/_/g, ' '), 8)
+}
+
+// ---- Namen der Sitzungen -----------------------------------------------------------------------------------
+
+/** Name ohne Kennung: der Titel (auf 40 Zeichen gekürzt), sonst „<Ordner> · seit HH:MM". */
+export function sitzungsGrundname(s: Pick<LeitstandSitzung, 'titel' | 'projekt' | 'gestartet' | 'zaehlSeit'>, jetzt: number): string {
+  if (s.titel) return kuerzen(s.titel, TITEL_MAX)
+  const seit = s.gestartet ?? s.zaehlSeit
+  return seit === null ? s.projekt : `${s.projekt} · seit ${resetZeit(seit, jetzt)}`
+}
+
+/** Anzeigenamen; nur wo zwei sichtbare Sitzungen sonst gleich hießen, hängt eine Kurz-ID („·ab12") dran. */
+export function anzeigeNamen(liste: LeitstandSitzung[], jetzt: number): Map<string, string> {
+  const grund = new Map(liste.map(s => [s.sessionId, sitzungsGrundname(s, jetzt)] as const))
+  const zaehl = new Map<string, number>()
+  for (const n of grund.values()) zaehl.set(n, (zaehl.get(n) ?? 0) + 1)
+  return new Map(
+    liste.map(s => {
+      const n = grund.get(s.sessionId) ?? s.projekt
+      return [s.sessionId, (zaehl.get(n) ?? 0) > 1 ? `${kuerzen(n, TITEL_MAX - 6)} ·${s.sessionId.slice(0, 4)}` : n] as const
+    }),
+  )
+}
+
+/** Zustand einer nicht mehr aktiven Sitzung: „beendet 11:52" bzw. „inaktiv 6 m". */
+export function zustandInaktiv(s: Pick<LeitstandSitzung, 'beendet' | 'herz'>, jetzt: number): string {
+  return s.beendet !== null ? `beendet ${uhr(s.beendet)}` : `inaktiv ${vorZeit(jetzt - s.herz)}`
 }

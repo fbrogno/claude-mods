@@ -1,10 +1,12 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { baueAnsicht, zeilenBreite } from '../hooks/ansicht'
+import { baueAnsicht, STUFEN, ansichtHoehe, zeilenBreite } from '../hooks/ansicht'
 import type { AnsichtDaten } from '../hooks/ansicht'
-import { HUETE, Zellen, crewZellen, hutFuer, pixel, ringZellen } from '../hooks/clawd'
+import { HUETE, Zellen, crewZellen, farbe, hutFuer, maleMann, pixel, ringZellen } from '../hooks/clawd'
 import type { MannZustand } from '../hooks/clawd'
 import {
+  alteDateiHerz,
+  anzeigeNamen,
   ausblendenListe,
   bashZiel,
   basename,
@@ -12,11 +14,17 @@ import {
   dateiName,
   dezimal,
   dollar,
+  gruppiere,
+  istSitzungVersteckt,
+  projektOrdner,
+  titelAusTreffern,
   istVersteckt,
   kostenBasisFuer,
   leerZ,
   limitsJeProfil,
+  modelleSumme,
   modellBezeichnung,
+  profilKurz,
   pruefeSitzung,
   resetZeit,
   tagKey,
@@ -24,9 +32,11 @@ import {
   tagWechsel,
   leererEigenStand,
   tokens,
+  titelBereinigen,
   trefferQuote,
   uhr,
   zaehle,
+  zaehlerSumme,
   zaehlLuecke,
   zielAus,
 } from '../hooks/logik'
@@ -43,7 +53,7 @@ const z = (anfragen: number, eingabe: number, cacheLesen: number, cacheSchreiben
 
 /** Eine fremde Sitzung (Format 2) mit neutralen Namen. */
 const fremde = (id: string, teil: Partial<LeitstandSitzung> = {}): LeitstandSitzung => ({
-  v: 2, sessionId: id, profil: '.claude', projekt: id, modell: 'opus 5.5', kontextProzent: 40, gestartet: JETZT - 2 * STD, zaehlSeit: JETZT - 2 * STD,
+  v: 2, sessionId: id, profil: '.claude', projekt: id, titel: null, modell: 'opus 5.5', kontextProzent: 40, gestartet: JETZT - 2 * STD, zaehlSeit: JETZT - 2 * STD,
   tag: tagKey(JETZT), gesamt: z(10, 1000, 90_000, 5000, 4000), haupt: z(10, 1000, 90_000, 5000, 4000), modelle: { 'opus 5.5': z(10, 1000, 90_000, 5000, 4000) },
   kosten: 1.5, kostenHeute: 1.5, limits: [], limitsZeit: null, letzteAntwort: JETZT - 5 * MIN, zustand: 'arbeitet', zustandSeit: JETZT - MIN,
   werkzeug: 'Bash', ziel: 'npm test', agents: [], beendet: null, herz: JETZT, ...teil,
@@ -80,6 +90,15 @@ function welt(
     jetzt: JETZT,
     id: 'eigene',
     usage: { startedAt: JETZT - STD, context: { tokens: 50_000, window: 200_000, percent: 25 }, rateLimits: [], ...opts.usage } as Nutzungen,
+    /** Transcript-Dateien des Hosts (Pfad → Text), aus denen die Mod den Titel liest. */
+    transkripte: new Map<string, string>(),
+    greps: 0,
+    /** Legt ein Transcript der Sitzung an (oder hängt Zeilen an) und gibt den Pfad zurück. */
+    transkript(zeilen: string[], id = 'eigene', cwd = opts.cwd) {
+      const pfad = `/home/test/.claude-firma2/projects/${projektOrdner(cwd)}/${id}.jsonl`
+      w.transkripte.set(pfad, (w.transkripte.get(pfad) ?? '') + zeilen.join('\n') + '\n')
+      return pfad
+    },
     agentenListe: opts.agentenListe ?? [],
     uhr: null as any,
     async vor(ms: number) {
@@ -95,13 +114,23 @@ function welt(
   on('fs.read', (_$: any, e: any) => ({ value: speicher.get(e.path)?.text ?? '' }))
   on('fs.list', () => ({ value: [...speicher.entries()].filter(([p]) => p.startsWith(DIR + '/')).map(([p, v]) => ({ name: p.split('/').pop(), kind: 'file', size: 1, mtimeMs: v.mtime, isLink: false })) }))
   on('process.run', (_$: any, e: any) => {
+    const antwort = (exitCode: number, stdout = '') => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
     if (e.argv[0] === 'rm') for (const p of e.argv.slice(2)) { speicher.delete(p); w.entfernt.push(p) }
-    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (e.argv[0] === 'grep') {
+      // grep -a -o -E '"(customTitle|aiTitle)":"…"' <Transcript>: nur die Titel-Treffer, wie das echte grep
+      w.greps++
+      const text = w.transkripte.get(e.argv[e.argv.length - 1])
+      if (text === undefined) return antwort(2)
+      const treffer = text.match(/"(customTitle|aiTitle)":"([^"\\]|\\.)*"/g) ?? []
+      return antwort(treffer.length ? 0 : 1, treffer.length ? `${treffer.join('\n')}\n` : '')
+    }
+    return antwort(0)
   })
   on('session.start', () => ({ cwd: opts.cwd }))
   on('session.end', (_$: any, e: any) => ({ reason: e.reason, sessionId: e.sessionId, resume: e.resume }) as any)
   on('session.id', () => ({ value: w.id }))
   on('session.cwd', () => ({ value: opts.cwd }))
+  on('session.root', () => ({ value: opts.cwd }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('session.usage', () => ({ value: w.usage }))
   on('command.register', () => ({ value: undefined }) as any)
@@ -243,7 +272,7 @@ test('Cache-Trefferquote und geschätzte Ersparnis (Formel)', () => {
 
 // ---- Heute, beendete Sitzungen, Aufräumen ---------------------------------------------------------------
 
-test('Beendete Sitzung zählt in „heute"; Dateien von gestern werden beim Lesen gelöscht', async ($, on) => {
+test('Beendete Sitzung zählt in „heute" und steht gedimmt unter „heute beendet/ruhend"; Dateien von gestern werden beim Lesen gelöscht', async ($, on) => {
   const w = welt(on, {
     cwd: '/work/brain',
     dateien: {
@@ -257,7 +286,10 @@ test('Beendete Sitzung zählt in „heute"; Dateien von gestern werden beim Lese
   const ui = await $.ui.mount({ ...PANE(80), surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /\$ 4,00/ })).toBeDefined() // 1,50 + 2,50 (+ eigene 0)
   expect(await ui.find({ key: 'a' })).toBeDefined() // laufende Sitzung steht in der Liste
-  expect(await ui.find({ key: 'b' })).toBeUndefined() // beendete nur in der Kostenaufteilung
+  expect(await ui.find({ type: 'Text', text: /heute beendet\/ruhend/ })).toBeDefined()
+  const beendet = await ui.find({ key: 'b' }) // jede Sitzung der Kostenaufteilung steht auch in der Liste (gedimmt, mit ○)
+  expect(beendet).toBeDefined()
+  expect((beendet as any).text).toMatch(/○ beendet 11:30/)
   expect(await ui.find({ type: 'Text', text: /backend/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /altlast/ })).toBeUndefined()
   expect(w.entfernt).toContain(`${DIR}/alt.json`)
@@ -269,18 +301,35 @@ test('Beendete Sitzung zählt in „heute"; Dateien von gestern werden beim Lese
   expect(w.entfernt).not.toContain(`${DIR}/${dateiName('eigene')}`)
 })
 
-test('Datei aus Mod 0.1 wird gezeigt, aber nicht in „heute" gerechnet', async ($, on) => {
+test('Dateien aus Mod 0.1 (ohne Format 2) werden ignoriert, nie gerechnet und ab 10 min Herzschlag-Alter gelöscht', async ($, on) => {
+  const v1 = (id: string, herz: number) => ({ v: 1, sessionId: id, projekt: `altmod-${id}`, modell: 'opus', kontextProzent: 10, letzteAntwort: null, kosten: 99, zustand: 'wartet', werkzeug: null, ziel: '', seit: herz, agents: [], herz })
   const w = welt(on, {
     cwd: '/work/brain',
-    dateien: { 'alt.json': { inhalt: { v: 1, sessionId: 'alt', projekt: 'altmod', modell: 'opus', kontextProzent: 10, letzteAntwort: null, kosten: 99, zustand: 'wartet', werkzeug: null, ziel: '', seit: JETZT, agents: [], herz: JETZT } } },
+    dateien: {
+      'frisch.json': { inhalt: v1('frisch', JETZT - 2 * MIN) },
+      'alt.json': { inhalt: v1('alt', JETZT - 11 * MIN) },
+      'a.json': { inhalt: fremde('a', { projekt: 'webshop' }) },
+    },
   })
   await starten($, '/work/brain')
   await w.vor(2100)
   const ui = await $.ui.mount({ ...PANE(80), surface: 'terminal' })
-  expect(await ui.find({ key: 'alt' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /\+1 ohne Zähler/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /\$ 99/ })).toBeUndefined()
+  expect(await ui.find({ key: 'a' })).toBeDefined()
+  expect(await ui.find({ key: 'frisch' })).toBeUndefined() // nie angezeigt
+  expect(await ui.find({ key: 'alt' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /ohne Zähler/ })).toBeUndefined() // kein „+1 ohne Zähler" mehr
+  expect(await ui.find({ type: 'Text', text: /\$ 99/ })).toBeUndefined() // nie gerechnet
+  expect(w.entfernt).toContain(`${DIR}/alt.json`) // über 10 min: weg
+  expect(w.entfernt).not.toContain(`${DIR}/frisch.json`) // frischer Herzschlag: bleibt liegen (die alte Mod schreibt noch)
   await ui.unmount()
+  // wird die frische Datei später alt, räumt der nächste Lesevorgang auf
+  await w.vor(10 * MIN)
+  const ui2 = await $.ui.mount({ ...PANE(80), surface: 'terminal' })
+  await ui2.unmount()
+  expect(w.entfernt).toContain(`${DIR}/frisch.json`)
+  expect(pruefeSitzung(v1('x', JETZT))).toBeNull()
+  expect(alteDateiHerz(v1('x', 5))).toBe(5)
+  expect(alteDateiHerz(fremde('x'))).toBeNull()
 })
 
 test('Fortsetzung am selben Tag: Zähler der Datei werden wieder aufgenommen', async ($, on) => {
@@ -350,42 +399,58 @@ test('Tageswechsel setzt die Zähler zurück', () => {
 
 // ---- Limits ------------------------------------------------------------------------------------------------------
 
-test('Limits: nur zeigen, wenn vorhanden; Beschriftung 5 h / 7 T; Reset als Uhrzeit bzw. Wochentag; abgelaufene Fenster fallen weg', async ($, on) => {
+test('Limits: kontoweit der jüngste Stand je Profil aus ALLEN Dateien (auch ruhende und beendete); Stand HH:MM erst nach 15 min; 5 h / 7 T', async ($, on) => {
+  const limits = (a: number, b: number) => [{ art: 'five_hour', prozent: a, reset: JETZT + 2 * STD }, { art: 'seven_day', prozent: b, reset: JETZT + 3 * TAG }]
   const w = welt(on, {
     cwd: '/work/webshop',
     dateien: {
-      'a.json': {
-        inhalt: fremde('a', {
-          limits: [{ art: 'five_hour', prozent: 54, reset: JETZT + 2 * STD }, { art: 'seven_day', prozent: 22, reset: JETZT + 3 * TAG }, { art: 'five_hour_alt', prozent: 99, reset: JETZT - MIN }],
-          limitsZeit: JETZT,
-        }),
-      },
+      // ältere Messung einer laufenden Sitzung, jüngere einer beendeten: die jüngere gilt
+      'a.json': { inhalt: fremde('a', { limits: limits(10, 20), limitsZeit: JETZT - 40 * MIN }) },
+      'b.json': { inhalt: fremde('b', { limits: limits(54, 22), limitsZeit: JETZT - 30 * MIN, beendet: JETZT - 20 * MIN, herz: JETZT - 20 * MIN }) },
     },
   })
   await starten($, '/work/webshop')
   await w.vor(2100)
   const ui = await $.ui.mount({ ...PANE(80), surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /LIMITS/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /5 h/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /54 %/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Reset 14:00/ })).toBeDefined()
+  const zeilen = ((await ui.findAll({ type: 'Text', text: /5 h/ })) as any[]).map(t => t.text as string).join('\n')
+  expect(zeilen).toContain('54 %') // Wert der beendeten, jüngeren Sitzung
+  expect(zeilen).not.toContain('10 %')
+  expect(zeilen).toContain('Reset 14:00')
+  expect(zeilen).toContain('Stand 11:30') // älter als 15 min: gedimmt dahinter
   expect(await ui.find({ type: 'Text', text: /7 T/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: new RegExp(`Reset ${resetZeit(JETZT + 3 * TAG, JETZT)}`) })).toBeDefined()
   expect(resetZeit(JETZT + 3 * TAG, JETZT)).toMatch(/^So \d\d:\d\d$/) // 22.10. + 3 Tage = Sonntag (Zeitumstellung: 11:00 statt 12:00)
-  expect(await ui.find({ type: 'Text', text: /99 %/ })).toBeUndefined() // Fenster ist zurückgesetzt
   await ui.unmount()
   expect(resetZeit(JETZT + 2 * STD, JETZT)).toBe('14:00')
   expect(uhr(JETZT)).toBe('12:00')
-  // je Profil der jüngste Messwert
-  const p = limitsJeProfil(
-    [
-      fremde('x', { profil: '.claude', limits: [{ art: 'five_hour', prozent: 10, reset: null }], limitsZeit: JETZT - 5 * MIN }),
-      fremde('y', { profil: '.claude', limits: [{ art: 'five_hour', prozent: 20, reset: null }], limitsZeit: JETZT - MIN }),
-      fremde('z', { profil: '.claude-firma2', limits: [{ art: 'five_hour', prozent: 30, reset: null }], limitsZeit: JETZT }),
-    ],
-    JETZT,
-  )
-  expect(p.map(q => [q.profil, q.limits[0]!.prozent])).toEqual([['.claude', 20], ['.claude-firma2', 30]])
+})
+
+test('Limits: frischer Stand (unter 15 min) ohne „Stand"; abgelaufenes Fenster bleibt sichtbar als „Reset vorbei"; zwei Profile je eine Zeile mit Kennzeichen', () => {
+  const frisch = fremde('a', { limits: [{ art: 'five_hour', prozent: 54, reset: JETZT + 2 * STD }], limitsZeit: JETZT - 5 * MIN })
+  const einzel = (s: LeitstandSitzung[]) => baueAnsicht(ansichtDaten({ sitzungen: [fremde('eigene'), ...s] })).zeilen.map(zeilenText).join('\n')
+  expect(einzel([frisch])).toContain('Reset 14:00')
+  expect(einzel([frisch])).not.toContain('Stand')
+  const vorbei = fremde('a', { limits: [{ art: 'five_hour', prozent: 87, reset: JETZT - 10 * MIN }], limitsZeit: JETZT - 3 * STD })
+  const t = einzel([vorbei])
+  expect(t).toContain('87 %')
+  expect(t).toContain('Reset vorbei')
+  expect(t).toContain('Stand 09:00')
+  // zwei Profile: je eine Zeile mit kurzem Kennzeichen (std, zweit); der jüngste Stand je Profil
+  const p1 = fremde('p1', { profil: '.claude', limits: [{ art: 'five_hour', prozent: 28, reset: JETZT + 2 * STD }, { art: 'seven_day', prozent: 87, reset: JETZT + 2 * TAG }], limitsZeit: JETZT - 50 * MIN })
+  const p1neu = fremde('p1neu', { profil: '.claude', limits: [{ art: 'five_hour', prozent: 33, reset: JETZT + 2 * STD }, { art: 'seven_day', prozent: 88, reset: JETZT + 2 * TAG }], limitsZeit: JETZT - MIN })
+  const p2 = fremde('p2', { profil: '.claude-zweit', limits: [{ art: 'five_hour', prozent: 40, reset: JETZT + 90 * MIN }, { art: 'seven_day', prozent: 65, reset: JETZT + 3 * TAG }], limitsZeit: JETZT - 35 * MIN })
+  const a = baueAnsicht(ansichtDaten({ sitzungen: [fremde('eigene'), p1, p1neu, p2] }))
+  const zeilen = a.zeilen.map(zeilenText)
+  const iL = zeilen.findIndex(l => l.includes('LIMITS'))
+  const profilZeilen = zeilen.slice(iL + 1, iL + 3)
+  expect(profilZeilen[0]).toMatch(/^ std +5 h .* 33 %.*7 T .* 88 %/)
+  expect(profilZeilen[0]).not.toContain('Stand') // frisch
+  expect(profilZeilen[1]).toMatch(/^ zweit +5 h .* 40 %.*7 T .* 65 %.*Stand 11:25/)
+  expect(zeilen[iL + 3]).toContain('SITZUNGEN') // genau eine Zeile je Profil
+  expect(profilKurz('.claude')).toBe('std')
+  expect(profilKurz('.claude-firma2')).toBe('firma2')
+  for (const zl of a.zeilen) expect(zeilenBreite(zl)).toBeLessThanOrEqual(84)
 })
 
 test('Ohne Limits-Daten gibt es den Abschnitt LIMITS nicht', async ($, on) => {
@@ -535,27 +600,37 @@ test('Layout: keine Zeile breiter als bodyColumns (24 bis 140 Spalten, mit und o
 test('Layout: ab 56 Spalten volles Layout (4 Kacheln in einer Reihe, Ring, Crew-Figuren), darunter kompakt (2 × 2, kein Ring)', () => {
   const voll = baueAnsicht(ansichtDaten({ breite: 62 }))
   const kompakt = baueAnsicht(ansichtDaten({ breite: 55 }))
-  const blocks = (a: ReturnType<typeof baueAnsicht>, art: string) => a.zeilen.filter(z => z.art === art).length
-  expect(blocks(voll, 'block')).toBe(1) // Ring
-  expect(blocks(kompakt, 'block')).toBe(0)
-  expect(voll.crew).not.toBeNull()
-  expect(kompakt.crew).toBeNull()
+  const ringe = (a: ReturnType<typeof baueAnsicht>) => a.zeilen.filter(z => z.art === 'block' && z.key === 'ring').length
+  expect(ringe(voll)).toBe(1) // Ring
+  expect(ringe(kompakt)).toBe(0)
+  expect(voll.crew.length).toBeGreaterThan(0)
+  expect(kompakt.crew).toEqual([])
   const kachelReihen = (a: ReturnType<typeof baueAnsicht>) => a.zeilen.filter(z => z.art === 'text' && /^╭─+╮╭─+╮/.test(z.segs.map(s => s.t).join(''))).length
   expect(kachelReihen(voll)).toBe(1)
   expect(kachelReihen(kompakt)).toBe(2)
 })
 
-test('Layout: zu wenig Höhe lässt zuerst Fuß, Modelle und Limits weg, Kopf, Kacheln, Sitzungen und Crew bleiben', () => {
-  const alles = baueAnsicht(ansichtDaten({ hoehe: null }))
-  const hoehe = (a: ReturnType<typeof baueAnsicht>) => a.zeilen.reduce((n, zl) => n + (zl.art === 'raster' || zl.art === 'block' ? zl.raster.zeilen : 1), 0)
-  const eng = baueAnsicht(ansichtDaten({ hoehe: hoehe(alles) - 8 }))
-  expect(hoehe(eng)).toBeLessThanOrEqual(hoehe(alles) - 8)
+test('Höhe: bei wenig Platz wird verdichtet statt Abschnitte zu streichen: LIMITS und MODELLE bleiben (Ursache des Mangels in 0.2)', () => {
   const texteVon = (a: ReturnType<typeof baueAnsicht>) => a.zeilen.map(zeilenText).join('\n')
-  expect(texteVon(alles)).toContain('MODELLE')
-  expect(texteVon(eng)).not.toContain('MODELLE')
-  expect(texteVon(eng)).toContain('SITZUNGEN')
-  expect(texteVon(eng)).toContain('CREW')
-  expect(texteVon(eng)).toContain('LEITSTAND')
+  const alles = baueAnsicht(ansichtDaten({ hoehe: null }))
+  expect(alles.stufe).toBe(0)
+  const voll = ansichtHoehe(alles)
+  for (const abschnitt of ['LEITSTAND', 'LIMITS', 'SITZUNGEN', 'CREW', 'MODELLE', 'Kosten heute']) expect(texteVon(alles)).toContain(abschnitt)
+  // ein Pane in der Höhe des Screenshots (33 Zeilen) und weit darunter: jeder Abschnitt ist da
+  let vorige = 0
+  for (const hoehe of [voll - 1, voll - 8, 33, 28]) {
+    const a = baueAnsicht(ansichtDaten({ hoehe }))
+    expect(a.stufe).toBeGreaterThanOrEqual(vorige)
+    vorige = a.stufe
+    for (const abschnitt of ['LEITSTAND', 'LIMITS', 'SITZUNGEN', 'CREW', 'MODELLE', 'Kosten heute', 'Anfragen']) expect(texteVon(a)).toContain(abschnitt)
+    if (hoehe >= 28) expect(ansichtHoehe(a)).toBeLessThanOrEqual(hoehe)
+  }
+  // 33 Zeilen reichen, ohne die Figuren der arbeitenden Sitzung zu opfern
+  expect(baueAnsicht(ansichtDaten({ hoehe: 33 })).crew.length).toBeGreaterThan(0)
+  // schmal und ohne Raster: ebenfalls vollständig
+  const schmal = baueAnsicht(ansichtDaten({ breite: 50, raster: false, hoehe: 30 }))
+  for (const abschnitt of ['LIMITS', 'MODELLE', 'SITZUNGEN', 'CREW']) expect(texteVon(schmal)).toContain(abschnitt)
+  expect(STUFEN.length).toBeGreaterThan(5)
 })
 
 test('Kacheln und Modelle: Summe über die gewählte Sitzung (Standard: alle)', () => {
@@ -599,22 +674,24 @@ test('Pane auf Terminal und Desktop: Kopf, Kacheln, Sitzungen; Auswahl per Knopf
       const ui = await $.ui.mount({ ...PANE(spalten), surface })
       expect(await ui.find({ type: 'Text', text: /LEITSTAND/ })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: /SITZUNGEN/ })).toBeDefined()
-      expect(await ui.find({ type: 'Text', text: /3 aktiv/ })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /2 akt/ })).toBeDefined() // (ab 41 Spalten „2 aktiv", darunter „2 akt.") nur aktive Sitzungen mit Inhalt; die leere eigene steht in „+1 leere Sitzung"
+      expect(await ui.find({ type: 'Text', text: /\+1 leere Sitzung \(inkl\. diese\)/ })).toBeDefined()
       const baum: any = await ui.drawn()
       for (const zeile of zeilenDerWurzel(baum)) expect(messe(zeile)).toBeLessThanOrEqual(spalten)
       await ui.unmount()
     }
   }
-  // Ein Klick auf eine Sitzungszeile wählt sie: Crew, Kacheln und Modelle folgen
+  // Ein Klick auf eine Sitzungszeile wählt sie: Crew, Kacheln und Modelle folgen; „Alle" zeigt die Übersicht
   const ui = await $.ui.mount({ ...PANE(80), surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /CREW · brain/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /── CREW ─/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /CREW · / })).toBeUndefined()
   await ui.press({ key: 'b' })
   expect(await ui.find({ type: 'Text', text: /CREW · backend/ })).toBeDefined()
   await ui.press({ key: 'b' }) // zweiter Klick nimmt zurück
-  expect(await ui.find({ type: 'Text', text: /CREW · brain/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /CREW · / })).toBeUndefined()
   await ui.press({ key: 'a' })
   await ui.press({ key: 'alle' })
-  expect(await ui.find({ type: 'Text', text: /CREW · brain/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /CREW · / })).toBeUndefined()
   // Agent anklicken: Knöpfe Nachricht und Stopp erscheinen
   await ui.press({ key: 'a' })
   await ui.press({ key: 'g:a1' })
@@ -636,7 +713,7 @@ test('Leerzustand: ohne Sitzung (eigene ist privat) bleibt die Ansicht sauber', 
 
 // ---- Raster, Männchen, Animation ---------------------------------------------------------------------------------------
 
-test('Animation: nur der Crew-Streifen wird per blit gemalt, nur bei Änderung, nur solange das Pane offen ist', async ($, on) => {
+test('Animation: nur die Crew-Streifen werden per blit gemalt, nur bei Änderung, nur solange das Pane offen ist', async ($, on) => {
   const w = welt(on, { cwd: '/work/webshop', dateien: { 'a.json': { inhalt: fremde('a', { projekt: 'webshop', agents: [] }) } } })
   on('agent.spawn', () => ({ model: 'claude-haiku-4-5', agentId: 'ag1' }))
   await starten($, '/work/webshop')
@@ -644,16 +721,17 @@ test('Animation: nur der Crew-Streifen wird per blit gemalt, nur bei Änderung, 
   w.agentenListe = [{ id: 'ag1', description: 'Suche', type: 'Explore', status: 'running' }]
   await w.vor(2100)
   const ui = await $.ui.mount({ ...PANE(80), surface: 'terminal' })
-  const raster = await ui.find({ type: 'Raster', key: 'crew' })
-  expect(raster).toBeDefined()
+  // Übersicht: je aktiver Sitzung mit Inhalt ein eigener Streifen (hier die eigene mit Agent und die Datei „a")
+  expect(await ui.find({ type: 'Raster', key: 'crew:eigene' })).toBeDefined()
+  expect(await ui.find({ type: 'Raster', key: 'crew:a' })).toBeDefined()
   w.blits.length = 0
   await w.vor(1000) // vier Bilder
   expect(w.blits.length).toBeGreaterThanOrEqual(3) // ein laufender Agent: Beine und Arme wechseln
-  expect(w.blits[0]).toMatchObject({ requestId: 'leitstand', key: 'crew' })
+  expect(w.blits[0]).toMatchObject({ requestId: 'leitstand', key: 'crew:eigene' })
   const aufgebaut = Uint8Array.from(atob(w.blits[0].cells), c => c.charCodeAt(0))
   expect(aufgebaut.length).toBe(w.blits[0].columns * w.blits[0].rows * 12)
-  // Die ganze Zeichnung geschieht ohne Render-Durchlauf: der Baum hat nur das eine Raster
-  expect((await ui.findAll({ type: 'Raster' })).length).toBe(2) // Ring und Crew
+  // Die ganze Zeichnung geschieht ohne Render-Durchlauf: der Baum hat nur die Raster (Ring, zwei Crew-Streifen)
+  expect((await ui.findAll({ type: 'Raster' })).length).toBe(3)
   await ui.unmount()
 })
 
@@ -711,6 +789,292 @@ test('Raster: Packformat (u32-Tripel, Base64), Crew-Streifen und Ring', () => {
   expect(ring.zeilen).toBe(5)
   const mitte = Array.from({ length: 10 }, (_, x) => String.fromCodePoint(ring.cp[2 * 10 + x]!)).join('')
   expect(mitte).toContain('95')
+})
+
+// ---- Titel der Sitzung (0.3) -----------------------------------------------------------------------------------------
+
+test('Titel: kommt aus dem Transcript der Sitzung (customTitle vor aiTitle, jeweils der letzte), wird auf 40 Zeichen gekürzt; gelesen wird nur der Titel', async ($, on) => {
+  const w = welt(on, { cwd: '/work/webshop' })
+  await starten($, '/work/webshop')
+  await w.vor(2100)
+  expect(w.datei('eigene').titel).toBeNull() // noch kein Transcript: die Ansicht fällt auf „<Ordner> · seit HH:MM" zurück
+  const pfad = w.transkript(['{"type":"user","message":{"content":"geheimer Prompt"}}', '{"type":"ai-title","aiTitle":"Erster Titel","sessionId":"eigene"}'])
+  await w.vor(21_000) // alle 20 s wird nachgesehen
+  expect(w.datei('eigene').titel).toBe('Erster Titel')
+  w.transkript(['{"type":"ai-title","aiTitle":"Katalog-Export\\n prüfen und alle Preise dazu vergleichen, bitte"}'])
+  await w.vor(21_000)
+  const t = w.datei('eigene').titel as string
+  expect(t.length).toBeLessThanOrEqual(40)
+  expect(t.startsWith('Katalog-Export prüfen und alle Preise')).toBe(true)
+  // ein selbst vergebener Titel (/rename) geht vor, auch wenn danach ein neuer aiTitle folgt
+  w.transkript(['{"type":"custom-title","customTitle":"Mein \\"Name\\""}', '{"type":"ai-title","aiTitle":"Noch ein KI-Titel"}'])
+  await w.vor(21_000)
+  expect(w.datei('eigene').titel).toBe('Mein "Name"')
+  // die Datei der Mod enthält den Titel, aber nie Prompts oder Antworten
+  const roh = w.speicher.get(`${DIR}/${dateiName('eigene')}`)!.text
+  expect(roh).not.toContain('geheimer Prompt')
+  expect(pfad).toContain(projektOrdner('/work/webshop'))
+  // nicht öfter als alle 20 s nachsehen
+  const anzahl = w.greps
+  await w.vor(10_000)
+  expect(w.greps).toBe(anzahl)
+  expect(titelBereinigen('   ')).toBeNull()
+  expect(titelBereinigen(undefined)).toBeNull()
+  expect(titelBereinigen('x'.repeat(100))!.length).toBe(40)
+  expect(projektOrdner('/Users/x/.claude/projects')).toBe('-Users-x--claude-projects')
+  expect(titelAusTreffern('"aiTitle":"A"\n"aiTitle":"B"\n')).toBe('B')
+  expect(titelAusTreffern('"aiTitle":"A"\n"customTitle":"C"\n"aiTitle":"B"\n')).toBe('C')
+  expect(titelAusTreffern('Quatsch\n"aiTitle":kaputt\n')).toBeNull()
+})
+
+test('Titel und Ausblenden: nennt der Titel ein Ausblenden-Wort, schreibt die Sitzung nichts mehr und ihre frühere Datei verschwindet', async ($, on) => {
+  const w = welt(on, { cwd: '/work/webshop' })
+  await starten($, '/work/webshop')
+  await w.vor(2100)
+  expect(w.hat('eigene')).toBe(true)
+  w.transkript(['{"type":"ai-title","aiTitle":"Hobbybot Planung"}'])
+  await w.vor(21_000)
+  expect(w.hat('eigene')).toBe(false)
+  expect(w.entfernt).toContain(`${DIR}/${dateiName('eigene')}`)
+  const geschrieben = w.geschrieben.length
+  await w.vor(60_000)
+  expect(w.geschrieben.length).toBe(geschrieben) // und bleibt still
+  expect(istSitzungVersteckt('/work/webshop', 'Spielwelt bauen', ['spielwelt'])).toBe(true)
+  expect(istSitzungVersteckt('/work/webshop', 'Katalog', ['spielwelt'])).toBe(false)
+  expect(istSitzungVersteckt('/work/webshop', null, ['spielwelt'])).toBe(false)
+})
+
+test('Titel: ein privater Arbeitsordner liest gar kein Transcript', async ($, on) => {
+  const w = welt(on, { cwd: '/work/familie' })
+  w.transkript(['{"type":"ai-title","aiTitle":"Etwas"}'], 'eigene', '/work/familie')
+  await starten($, '/work/familie')
+  await w.vor(30_000)
+  expect(w.greps).toBe(0)
+  expect(w.geschrieben).toEqual([])
+})
+
+test('Namen: Titel, sonst „<Ordner> · seit HH:MM"; Kurz-ID nur, wo zwei Sitzungen sonst gleich hießen', () => {
+  const a = fremde('abcd1111', { projekt: 'source', gestartet: JETZT - 60 * MIN })
+  const b = fremde('efgh2222', { projekt: 'source', gestartet: JETZT - 60 * MIN })
+  const c = fremde('ijkl3333', { projekt: 'source', gestartet: JETZT - 30 * MIN })
+  const t = fremde('mnop4444', { projekt: 'source', titel: 'Katalog-Export prüfen' })
+  const lang = fremde('qrst5555', { projekt: 'source', titel: 'x'.repeat(60) })
+  const n = anzeigeNamen([a, b, c, t, lang], JETZT)
+  expect(n.get('abcd1111')).toBe('source · seit 11:00 ·abcd')
+  expect(n.get('efgh2222')).toBe('source · seit 11:00 ·efgh')
+  expect(n.get('ijkl3333')).toBe('source · seit 11:30') // eindeutig: keine Kennung
+  expect(n.get('mnop4444')).toBe('Katalog-Export prüfen')
+  expect(Array.from(n.get('qrst5555')!).length).toBeLessThanOrEqual(40)
+  // zwei Sitzungen mit gleichem Titel bekommen die Kennung ebenfalls
+  const g1 = fremde('1111aaaa', { titel: 'Gleich' })
+  const g2 = fremde('2222bbbb', { titel: 'Gleich' })
+  expect([...anzeigeNamen([g1, g2], JETZT).values()]).toEqual(['Gleich ·1111', 'Gleich ·2222'])
+  // eine Sitzung von gestern zeigt den Wochentag
+  const gestern = fremde('zzzz', { projekt: 'source', gestartet: JETZT - 30 * STD })
+  expect(anzeigeNamen([gestern], JETZT).get('zzzz')).toMatch(/^source · seit [A-Z][a-z] \d\d:\d\d$/)
+})
+
+// ---- Gruppen der Sitzungsliste (0.3) ----------------------------------------------------------------------------------
+
+/** Die Lage aus dem Screenshot: drei leere frische Sitzungen, eine ruhende mit Kosten, eine arbeitende, eine im anderen Profil. */
+function lageScreenshot(): LeitstandSitzung[] {
+  const leer = (id: string) => fremde(id, { projekt: 'source', gesamt: leerZ(), haupt: leerZ(), modelle: {}, kosten: 0, kostenHeute: 0, kontextProzent: null, letzteAntwort: null, zustand: 'wartet', werkzeug: null, ziel: '', zaehlSeit: null, gestartet: JETZT - 5 * MIN })
+  return [
+    leer('eigene'),
+    leer('leer1'),
+    leer('leer2'),
+    fremde('ruhend', { projekt: 'backend', gesamt: z(1, 4000, 29_000, 2000, 700), haupt: z(1, 4000, 29_000, 2000, 700), modelle: { 'opus 5.5': z(1, 4000, 29_000, 2000, 700) }, kosten: 0.19, kostenHeute: 0.19, zustand: 'ruht', zustandSeit: JETZT - 50 * MIN, beendet: JETZT - 25 * MIN, herz: JETZT - 25 * MIN, limits: [{ art: 'five_hour', prozent: 28, reset: JETZT + 2 * STD }, { art: 'seven_day', prozent: 87, reset: JETZT + 2 * TAG }], limitsZeit: JETZT - 50 * MIN }),
+    fremde('arbeitend', { projekt: 'webshop', titel: 'Katalog-Export prüfen', kostenHeute: 3.4, agents: [agent('x1', { name: 'Aufräumen', werkzeug: 'Bash', ziel: 'npm test' }), agent('x2', { name: 'Suche', stand: 'fertig', beendet: JETZT - MIN }), agent('x3', { name: 'Prüfen', stand: 'fehler', beendet: JETZT - 2 * MIN })] }),
+    fremde('zweit', { profil: '.claude-zweit', projekt: 'dokumente', zustand: 'wartet', kostenHeute: 1.2 }),
+  ]
+}
+
+test('Gruppen: aktiv mit Inhalt einzeln, leere als EINE Zeile, heute Beendete gedimmt darunter; „N aktiv" zählt nur die erste Gruppe', () => {
+  const gr = gruppiere(lageScreenshot(), 'eigene', JETZT)
+  expect(gr.aktiv.map(s => s.sessionId).sort()).toEqual(['arbeitend', 'zweit'])
+  expect(gr.leer.map(s => s.sessionId).sort()).toEqual(['eigene', 'leer1', 'leer2'])
+  expect(gr.beendet.map(s => s.sessionId)).toEqual(['ruhend'])
+  const text = baueAnsicht(ansichtDaten({ sitzungen: lageScreenshot() })).zeilen.map(zeilenText)
+  const joined = text.join('\n')
+  expect(joined).toContain('2 aktiv · 1 Agent') // Kopfzeile
+  expect(text.filter(l => /\+3 leere Sitzungen \(inkl\. diese\)/.test(l)).length).toBe(1) // eine Zeile statt dreier
+  expect(joined).not.toMatch(/source · seit/) // die leeren stehen nicht einzeln da
+  const trenn = text.findIndex(l => /heute beendet\/ruhend/.test(l))
+  expect(trenn).toBeGreaterThan(text.findIndex(l => /\+3 leere/.test(l)))
+  expect(text[trenn + 1]).toMatch(/backend · seit \d\d:\d\d +○ beendet 11:35 +\$ 0,19/) // mit Kosten > 0 in der Liste: auch der Kostenposten ist dort zu finden
+  // leere Sitzungen ohne Kosten, die beendet sind, erscheinen auch nur in der Zählzeile
+  const beendetLeer = fremde('bl', { gesamt: leerZ(), kostenHeute: 0, beendet: JETZT - 5 * MIN, herz: JETZT - 5 * MIN })
+  expect(gruppiere([beendetLeer], 'x', JETZT).leer.length).toBe(1)
+  // arbeitet oder braucht dich: auch ohne Anfrage und Agents nicht leer
+  const braucht = fremde('br', { gesamt: leerZ(), kostenHeute: 0, zustand: 'braucht', zustandSeit: JETZT - MIN })
+  expect(gruppiere([braucht], 'x', JETZT).aktiv.length).toBe(1)
+  // jede Sitzung der Kostenaufteilung steht auch in der Liste
+  const kosten = lageScreenshot().filter(s => (s.kostenHeute ?? 0) > 0).map(s => s.sessionId)
+  const inListe = [...gr.aktiv, ...gr.beendet].map(s => s.sessionId)
+  for (const id of kosten) expect(inListe).toContain(id)
+})
+
+test('Gruppen: vor der ersten Anfrage stehen Kontext und Cache als „neu" (gedimmt), nicht als „–"', () => {
+  const frisch = fremde('frisch', { projekt: 'webshop', gesamt: leerZ(), haupt: leerZ(), modelle: {}, kostenHeute: 0, kontextProzent: null, letzteAntwort: null, zustand: 'arbeitet' })
+  const text = baueAnsicht(ansichtDaten({ sitzungen: [fremde('eigene'), frisch] })).zeilen.find(zl => zl.art === 'knopf' && zl.key === 'frisch')!
+  expect(zeilenText(text)).toMatch(/neu\s+opus\s+● ?neu|neu\s+opus\s+neu/)
+  const segs = (text as any).segs as Array<{ t: string; dim?: boolean }>
+  expect(segs.filter(sg => sg.t === 'neu').every(sg => sg.dim === true)).toBe(true)
+  expect(segs.filter(sg => sg.t === 'neu').length).toBe(2)
+  // nach der ersten Anfrage ohne Messwert bleibt es beim „–"
+  const mitAnfrage = fremde('m', { kontextProzent: null, letzteAntwort: null })
+  const t2 = baueAnsicht(ansichtDaten({ sitzungen: [fremde('eigene'), mitAnfrage] })).zeilen.find(zl => zl.art === 'knopf' && zl.key === 'm')!
+  expect(zeilenText(t2)).not.toContain('neu')
+})
+
+// ---- Konsistenz der Mengen (0.3) --------------------------------------------------------------------------------------
+
+test('Konsistenz: Kacheln, Cache, Kosten und Modelle beziehen sich auf dieselbe Menge (Alle = alle heutigen Sitzungen inkl. beendeter)', () => {
+  const sitz = ansichtDaten().sitzungen // enthält die beendete Sitzung „d"
+  for (const auswahl of [null, 'eigene', 'd', 'b']) {
+    const umfang = auswahl ? sitz.filter(s => s.sessionId === auswahl) : sitz
+    const zs = zaehlerSumme(umfang)
+    const ms = modelleSumme(umfang)
+    // Daten: die Summe über die Modelle ist die Summe der Kacheln
+    expect(ms.reduce((n, m) => n + m.z.anfragen, 0)).toBe(zs.anfragen)
+    expect(ms.reduce((n, m) => n + m.z.eingabe, 0)).toBe(zs.eingabe)
+    expect(ms.reduce((n, m) => n + m.z.cacheLesen, 0)).toBe(zs.cacheLesen)
+    expect(ms.reduce((n, m) => n + m.z.cacheSchreiben, 0)).toBe(zs.cacheSchreiben)
+    expect(ms.reduce((n, m) => n + m.z.ausgabe, 0)).toBe(zs.ausgabe)
+    // Anzeige: Kachel „Anfragen", Zeilen „… Anfr." der Modelle und Kostenkarte nennen dasselbe
+    const zeilen = baueAnsicht(ansichtDaten({ auswahl })).zeilen.map(zeilenText).join('\n').split('\n')
+    const kachel = zeilen.find(l => /^│\s*[\d.]+\s*││/.test(l))!.match(/^│\s*([\d.]+)\s*│/)![1]!
+    expect(kachel).toBe(String(zs.anfragen).replace(/\B(?=(\d{3})+(?!\d))/g, '.'))
+    const i = zeilen.findIndex(l => l.includes('MODELLE'))
+    const modellZeilen = zeilen.slice(i + 1).filter(l => /Anfr\./.test(l) && /●/.test(l))
+    const summe = modellZeilen.reduce((n, l) => n + Number(l.match(/([\d.]+) Anfr\./)![1]!.replace(/\./g, '')), 0)
+    expect(summe).toBe(zs.anfragen)
+    expect(modellZeilen.length).toBe(ms.length) // kein Modell fehlt
+    const kosten = umfang.reduce((n, s) => n + (s.kostenHeute ?? 0), 0)
+    expect(zeilen.join('\n')).toContain(`gemessen · ${auswahl ? '' : 'alle Sitzungen'}`)
+    expect(zeilen.some(l => l.includes(dollar(kosten)))).toBe(true)
+  }
+})
+
+// ---- Crew (0.3) -------------------------------------------------------------------------------------------------------
+
+/** Text des Rasters (nur Zeichen, ohne Farbe) als Zeilen. */
+function rasterText(r: Zellen): string[] {
+  return Array.from({ length: r.zeilen }, (_, y) => Array.from({ length: r.spalten }, (_, x) => String.fromCodePoint(r.cp[y * r.spalten + x]!)).join(''))
+}
+
+test('Crew-Übersicht (Alle): je aktiver Sitzung mit Inhalt ein Block mit Namen links und Figuren daneben, laufende Agents als Zeilen darunter', () => {
+  const eigene = ansichtDaten().sitzungen[0]!
+  const sitz = [{ ...eigene, titel: 'Katalog-Export prüfen' }, ...ansichtDaten().sitzungen.slice(1)]
+  const a = baueAnsicht(ansichtDaten({ sitzungen: sitz }))
+  const bloecke = a.zeilen.filter((zl): zl is Extract<typeof zl, { art: 'block' }> => zl.art === 'block' && zl.key.startsWith('crew:'))
+  expect(bloecke.map(b => b.key)).toEqual(['crew:eigene', 'crew:c', 'crew:b']) // Reihenfolge der Liste (braucht dich vor wartet); „d" ist beendet, die Figuren fehlen dort
+  expect(a.crew.map(c => c.key)).toEqual(['crew:eigene', 'crew:c', 'crew:b'])
+  const mein = bloecke[0]!
+  expect(mein.raster.zeilen).toBe(6)
+  expect(mein.links.map(l => l.map(sg => sg.t).join('')).join('\n')).toContain('Katalog-Export prüfen') // Sitzungsname links
+  const figuren = a.crew[0]!.figuren
+  expect(figuren.length).toBe(5) // Haupt + 4 Agents
+  expect(figuren[0]).toMatchObject({ haupt: true, name: 'Haupt' })
+  const bild = rasterText(mein.raster)
+  expect(bild[4]).toContain('opus 5.5') // unter jeder Figur Modell-Kurzname …
+  expect(bild[5]).toContain('Haupt') // … und höchstens 10 Zeichen Name
+  expect(bild[5]).toContain('Aufräumen')
+  // laufende Agents: eine Zeile mit Werkzeug, Ziel, Laufzeit, Anfragen, Tokens; fertige und fehlgeschlagene nur als Figur
+  const zeilen = a.zeilen.map(zeilenText)
+  const iA = zeilen.findIndex(l => l.includes('Edit') && l.includes('build.mjs'))
+  expect(iA).toBeGreaterThan(-1)
+  expect(zeilen[iA]).toMatch(/Edit +build\.mjs +2:00 +31 Anfr\. +↑1,3 M ↓18 k/)
+  expect(zeilen.some(l => /Grep +TODO/.test(l))).toBe(true)
+  expect(a.zeilen.filter(zl => zl.art === 'knopf' && zl.key.startsWith('g:')).map(zl => (zl as any).key).sort()).toEqual(['g:a1', 'g:a2'])
+  expect(zeilen.join('\n')).not.toContain('fertig') // keine Zeile für den fertigen Agent
+  // Namen stehen in der Werkzeugzeile nicht noch einmal (sie stehen unter den Figuren)
+  expect(zeilen[iA]).not.toContain('Aufräumen')
+  for (const zl of a.zeilen) expect(zeilenBreite(zl)).toBeLessThanOrEqual(84)
+})
+
+test('Crew-Übersicht: ab dem fünften Agent keine Figuren mehr, dafür „+N"; schmal ohne Figuren mit Namen in den Zeilen', () => {
+  const viele = Array.from({ length: 8 }, (_, i) => agent(`v${i}`, { name: `Agent${i}`, werkzeug: 'Read', ziel: `datei${i}.ts` }))
+  const sitz = [fremde('eigene', { agents: viele }), fremde('b')]
+  const a = baueAnsicht(ansichtDaten({ sitzungen: sitz }))
+  expect(a.crew[0]!.figuren.length).toBe(5) // Haupt + 4
+  expect(a.zeilen.map(zeilenText).join('\n')).toContain('+ 4 weitere Agents') // 8 − 4
+  // schmal (ohne Figuren): der Name steht in der Zeile, weil keine Figur ihn trägt
+  const schmal = baueAnsicht(ansichtDaten({ sitzungen: sitz, breite: 50, raster: false }))
+  expect(schmal.crew).toEqual([])
+  const text = schmal.zeilen.map(zeilenText).join('\n')
+  expect(text).toContain('Agent0')
+  for (const zl of schmal.zeilen) expect(zeilenBreite(zl)).toBeLessThanOrEqual(50)
+})
+
+test('Crew-Detail einer Sitzung: Name und Modell unter der Figur, die Liste nur mit Werkzeug, Ziel, Zeiten und Tokens', () => {
+  const a = baueAnsicht(ansichtDaten({ auswahl: 'eigene' }))
+  const figuren = a.zeilen.find(zl => zl.art === 'raster') as Extract<ReturnType<typeof baueAnsicht>['zeilen'][number], { art: 'raster' }>
+  const bild = rasterText(figuren.raster).join('\n')
+  expect(bild).toContain('Aufräumen')
+  expect(bild).toContain('sonnet 4.5')
+  const listen = a.zeilen.filter(zl => zl.art === 'knopf' && (zl.key.startsWith('g:') || zl.key.startsWith('h:'))).map(zeilenText)
+  expect(listen.length).toBe(5) // Haupt + 4 Agents
+  for (const l of listen) {
+    expect(l).not.toContain('Aufräumen')
+    expect(l).not.toContain('Suche')
+    expect(l).not.toMatch(/sonnet|haiku|opus/)
+  }
+  expect(listen.some(l => /Edit +build\.mjs/.test(l))).toBe(true)
+  expect(a.zeilen.map(zeilenText).join('\n')).toContain('CREW · webshop')
+})
+
+// ---- Männchen: Hut sitzt auf dem Kopf (0.3) ------------------------------------------------------------------------------
+
+test('Hüte: die unterste Hutzeile sitzt direkt auf dem Kopf, in derselben Zellzeile; die Krone ist `...........` / `...G.G.G...` / `...GGGGG...`', () => {
+  const zustaende: MannZustand[] = ['arbeitet', 'wartet', 'braucht', 'ruht', 'fertig', 'fehler']
+  for (const hut of HUETE) {
+    for (const zustand of zustaende) {
+      for (const tick of [0, 1, 2, 3, 11]) {
+        const g = pixel({ hut, zustand, tick, phase: tick })
+        // Pixelzeile 2 (Hut unten) und 3 (Kopf oben) bilden zusammen die Zellzeile 1
+        const hutUnten = g[2]!
+        const kopfOben = g[3]!
+        expect(hutUnten.some(Boolean)).toBe(true) // nie leer: der Hut schwebt nicht
+        expect(hutUnten.some((p, x) => p !== null && kopfOben[x] !== null)).toBe(true) // mindestens ein Hutpixel liegt unmittelbar über einem Kopfpixel
+        expect(g.length).toBe(8)
+      }
+    }
+  }
+  const krone = pixel({ hut: 'krone', zustand: 'wartet', tick: 0 })
+  const zeile = (y: number) => krone[y]!.map(p => (p === null ? '.' : p === '#FACC15' ? 'G' : '?')).join('')
+  expect([zeile(0), zeile(1), zeile(2)]).toEqual(['...........', '...G.G.G...', '...GGGGG...'])
+  // Eine Zelle zeigt oben den Hut, unten den Körper (Vorder- und Hintergrundfarbe): kein Spalt dazwischen
+  const raster = new Zellen(11, 4)
+  maleMann(raster, 0, 0, { hut: 'krone', zustand: 'wartet', tick: 0 })
+  const i = 1 * 11 + 4
+  expect(String.fromCodePoint(raster.cp[i]!)).toBe('▀')
+  expect(raster.fg[i]).toBe(farbe('#FACC15'))
+  expect(raster.bg[i]).toBe(farbe('#D97757'))
+  // Zellzeile 0 hat bei der Krone nur die Spitzen
+  expect(String.fromCodePoint(raster.cp[0 * 11 + 3]!)).toBe('▄')
+})
+
+// ---- Limits: Stand der Messung (0.3) ---------------------------------------------------------------------------------
+
+test('Limits-Stand in der Datei: erstmals der Beginn der Sitzung, danach der Zeitpunkt der Änderung', async ($, on) => {
+  const reset = new Date(JETZT + 2 * STD).toISOString()
+  const w = welt(on, { cwd: '/work/webshop', usage: { startedAt: JETZT - 3 * STD, rateLimits: [{ kind: 'five_hour', percentUsed: 30, resetsAt: reset }] } })
+  await starten($, '/work/webshop')
+  await w.vor(2100)
+  expect(w.datei('eigene').limitsZeit).toBe(JETZT - 3 * STD) // erstmals gesehen: nicht „jetzt" (der Wert kann älter sein)
+  await w.vor(10 * MIN)
+  expect(w.datei('eigene').limitsZeit).toBe(JETZT - 3 * STD) // unverändert: der Stand wird nicht frisch geredet
+  w.usage.rateLimits = [{ kind: 'five_hour', percentUsed: 31, resetsAt: reset }]
+  await w.vor(2100)
+  const stand = w.datei('eigene').limitsZeit as number
+  expect(stand).toBeGreaterThan(JETZT + 10 * MIN)
+  expect(stand).toBeLessThanOrEqual(w.jetzt)
+  // fehlen die Werte kurz, bleibt der letzte Stand in der Datei
+  w.usage.rateLimits = []
+  await w.vor(2100)
+  expect(w.datei('eigene').limits).toEqual([{ art: 'five_hour', prozent: 31, reset: JETZT + 2 * STD }])
+  expect(w.datei('eigene').limitsZeit).toBe(stand)
 })
 
 // ---- Formatierung und Bezeichnungen -------------------------------------------------------------------------------------

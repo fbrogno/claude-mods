@@ -107,8 +107,8 @@ Solange der Mac wach gehalten wird, steht die Restzeit in der Statuszeile.
 
 - Kopf und Kacheln: aktive Sitzungen, laufende Agents, Kosten heute; Anfragen · Eingabe · Cache lesen · Ausgabe, Cache-Trefferquote als Balken und Ring
 - gemessen aus jeder Modell-Anfrage (`turn.step`) und `/cost`; Geschätztes steht mit „≈“ (Cache-Ersparnis), Kosten je Modell gibt es nicht (nur Token-Anteile)
-- Limits (5 h / 7 T) mit Reset-Zeit, wenn das Konto sie meldet
-- Sitzungen wählbar (Klick oder Tab+Enter); Crew je Sitzung: Figur je Agent (Hut je Agent, Farbe = Modell, Bewegung = Zustand: arbeitet, wartet, braucht dich, fertig, Fehler, ruht), Werkzeug + Ziel (gekürzt, nie Befehlsinhalte), Laufzeit, Anfragen, Tokens; Knöpfe Nachricht und Stopp
+- Limits (5 h / 7 T) je Konto mit Reset-Zeit, jüngster Stand aus allen Sitzungen
+- Sitzungen mit ihrem Titel (wie in /resume), leere Fenster zusammengefasst, heute beendete mit Kosten darunter; wählbar (Klick oder Tab+Enter). Crew: Übersicht über alle Sitzungen oder Detail einer Sitzung — Figur je Agent (Hut je Agent, Farbe = Modell, Bewegung = Zustand: arbeitet, wartet, braucht dich, fertig, Fehler, ruht), Werkzeug + Ziel (gekürzt, nie Befehlsinhalte), Laufzeit, Anfragen, Tokens; Knöpfe Nachricht und Stopp
 - Modelle: Anfragen und Tokens ↑↓ je Modell
 - Jede Sitzung schreibt ihren Stand nach `~/.claude-leitstand/sitzungen/`; eine Sitzung erscheint nur, wenn die Mod dort installiert ist.
 - Ausblenden: Wörter in `/config` (`ausblenden`) oder je Zeile in `~/.claude-leitstand/ausblenden.txt` — nennt der Arbeitsordner eines davon, wird nichts geschrieben.

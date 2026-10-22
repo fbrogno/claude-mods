@@ -8,14 +8,16 @@ import { crewZellen } from './clawd'
 import type { Figur } from './clawd'
 import {
   AGENT_STILL_MS,
+  ALT_LOESCH_MS,
   FERTIG_ZEIGEN_MS,
   agentsFuerDatei,
+  alteDateiHerz,
   aktuell,
   ausblendenListe,
   basename,
   brauchtSchreiben,
   dateiName,
-  istVersteckt,
+  istSitzungVersteckt,
   kostenBasisFuer,
   kuerzen,
   leerZ,
@@ -26,6 +28,9 @@ import {
   tagKey,
   tagStart,
   tagWechsel,
+  projektOrdner,
+  titelAusTreffern,
+  titelBereinigen,
   werkzeugName,
   zaehle,
   zielAus,
@@ -33,9 +38,10 @@ import {
   zustandVon,
 } from './logik'
 
-// Neue Schlüssel (eigen2, alle2): ein Neuladen aus Version 0.1 findet so keinen Zustand in der alten Form vor.
-const eigenA = atom({ plugin: 'leitstand', key: 'eigen2' } as const, leererEigenStand())
-const alleA = atom({ plugin: 'leitstand', key: 'alle2' } as const, [])
+// Neue Schlüssel (eigen3, alle3): ein Neuladen aus einer früheren Version (0.1, 0.2) findet so keinen Zustand in der alten Form vor
+// (0.3 hat Felder für Titel und Limit-Stand dazubekommen); die Zähler holt `ausDateiLaden` aus der Datei der Sitzung zurück.
+const eigenA = atom({ plugin: 'leitstand', key: 'eigen3' } as const, leererEigenStand())
+const alleA = atom({ plugin: 'leitstand', key: 'alle3' } as const, [])
 const jetztA = atom({ plugin: 'leitstand', key: 'jetzt' } as const, 0)
 const offenA = atom({ plugin: 'leitstand', key: 'offen' } as const, false)
 const auswahlA = atom({ plugin: 'leitstand', key: 'auswahl' } as const, null)
@@ -62,10 +68,13 @@ let taktTimer: { cancel: () => void } | null = null
 let bildTimer: { cancel: () => void } | null = null
 let zuletzt: { json: string; zeit: number } | null = null
 let letzteId = ''
-/** Der zuletzt gezeichnete Crew-Streifen: daraus malt der Bild-Takt die nächsten Bilder. */
-let letztesBild: { figuren: Figur[]; spalten: number } | null = null
-let letzteZellen = ''
-const gemerkt = new Map<string, { mtime: number; s: LeitstandSitzung }>()
+/** Eine private Sitzung (Ausblenden-Wort im Ordner oder Titel) hat ihre eventuell früher geschriebene Datei schon entfernt. */
+let privatBereinigt = false
+/** Die zuletzt gezeichneten Crew-Streifen (einer je Sitzung in der Übersicht): daraus malt der Bild-Takt die nächsten Bilder. */
+let letzteBilder: Array<{ key: string; figuren: Figur[]; spalten: number }> = []
+const letzteZellen = new Map<string, string>()
+/** Gelesene Dateien nach Name; `s` null = Datei ohne Format 2 (wird ignoriert, ab 10 min Herzschlag-Alter gelöscht). */
+const gemerkt = new Map<string, { mtime: number; s: LeitstandSitzung | null; altHerz?: number }>()
 
 /** Hooks dürfen das Verhalten von Claude Code nie ändern: Fehler in unserem Teil werden verschluckt. */
 async function still(fn: () => Promise<unknown>): Promise<void> {
@@ -127,6 +136,10 @@ function limitsAus(roh: ReadonlyArray<{ kind: string; percentUsed: number; reset
   return aus
 }
 
+function gleicheLimits(a: LeitstandLimit[], b: LeitstandLimit[]): boolean {
+  return a.length === b.length && a.every((l, i) => l.art === b[i]!.art && l.prozent === b[i]!.prozent && l.reset === b[i]!.reset)
+}
+
 /** Früher gespeicherter Stand derselben Sitzung (Fortsetzung, Neustart der Sitzung am selben Tag): Zähler wieder aufnehmen. */
 async function ausDateiLaden($: EngineInterface, id: string, now: number) {
   const eigen = await read($, eigenA)
@@ -142,10 +155,13 @@ async function ausDateiLaden($: EngineInterface, id: string, now: number) {
   await update($, eigenA, s => {
     if (s.geladen) return s
     const basis = { ...s, geladen: true }
-    if (!alt || alt.alt || alt.tag !== heute || s.zaehlSeit !== null) return basis
+    if (!alt || alt.tag !== heute) return basis
+    // Der Titel und die Limits gehören der Sitzung, nicht dem Tageszähler: sie kehren auch zurück, wenn schon gezählt wurde.
+    const mitTitel = { ...basis, titel: basis.titel ?? alt.titel, limits: basis.limits.length > 0 ? basis.limits : alt.limits, limitsZeit: basis.limits.length > 0 ? basis.limitsZeit : alt.limitsZeit }
+    if (s.zaehlSeit !== null) return mitTitel
     const kostenBasis = alt.kosten !== null && alt.kostenHeute !== null ? { tag: heute, usd: Math.max(0, alt.kosten - alt.kostenHeute) } : null
     return {
-      ...basis,
+      ...mitTitel,
       tag: heute,
       zaehlSeit: alt.zaehlSeit,
       gesamt: alt.gesamt,
@@ -162,16 +178,26 @@ async function ausDateiLaden($: EngineInterface, id: string, now: number) {
 /** Die eigene Sitzung als Datei-Inhalt; null, wenn privat (dann gibt es gar keine Datei). */
 async function baueSitzung($: EngineInterface, cfg: Konfig, now: number): Promise<LeitstandSitzung | null> {
   const cwd = await $.session.cwd()
-  if (istVersteckt(cwd, [...cfg.ausblenden, ...(await lokaleAusblendenListe($))])) return null
+  const woerter = [...cfg.ausblenden, ...(await lokaleAusblendenListe($))]
+  if (istSitzungVersteckt(cwd, null, woerter)) return null
   const id = await $.session.id()
+  await still(() => titelAbfragen($, id, now))
+  if (istSitzungVersteckt(cwd, (await read($, eigenA)).titel, woerter)) return null
   await ausDateiLaden($, id, now)
   const usage = await $.session.usage().catch(() => undefined)
   const usd = usage?.cost?.usd
   const tag = tagKey(now)
-  // Tageswechsel, Beginn des Zustands und Tages-Kostenbasis nachführen
+  const limitsGemessen = limitsAus(usage?.rateLimits)
+  // Tageswechsel, Beginn des Zustands, Tages-Kostenbasis und Stand der Limits nachführen
   await update($, eigenA, s => {
     let n = tagWechsel(s, tag)
     if (!n.seit) n = { ...n, seit: now }
+    // Limits kommen mit den Antworten des Modells: ändert sich der Wert, ist er eben (spätestens seit dem letzten Takt) gemessen worden.
+    // Das erste Mal gesehen: Stand der letzten Antwort dieser Sitzung bzw. ihr Beginn (nicht „jetzt", der Wert kann älter sein).
+    if (limitsGemessen.length > 0 && !gleicheLimits(n.limits, limitsGemessen)) {
+      const erstmals = n.limits.length === 0
+      n = { ...n, limits: limitsGemessen, limitsZeit: erstmals ? (n.limitsZeit ?? n.letzterSchritt ?? usage?.startedAt ?? now) : now }
+    }
     if (typeof usd === 'number' && Number.isFinite(usd)) {
       // Nach /clear zählt nur, was ab dem ersten Messwert der neuen Sitzung dazukommt: das Kostenbuch kann bei 0 beginnen oder weiterlaufen.
       n = n.nachClear
@@ -185,12 +211,12 @@ async function baueSitzung($: EngineInterface, cfg: Konfig, now: number): Promis
   const prozent = usage?.context?.percent ?? (usage?.context?.tokens && usage.context.window ? (usage.context.tokens / usage.context.window) * 100 : undefined)
   const kosten = typeof usd === 'number' && Number.isFinite(usd) ? usd : null
   const kostenHeute = kosten !== null && eigen.kostenBasis ? Math.max(0, kosten - eigen.kostenBasis.usd) : null
-  const limits = limitsAus(usage?.rateLimits)
   return {
     v: 2,
     sessionId: id,
     profil: await profilName($),
     projekt: kuerzen(basename(cwd) || cwd, 40),
+    titel: eigen.titel,
     modell: modellBezeichnung(await $.session.model()),
     kontextProzent: typeof prozent === 'number' && Number.isFinite(prozent) ? Math.round(prozent) : null,
     gestartet: typeof usage?.startedAt === 'number' ? usage.startedAt : null,
@@ -201,8 +227,8 @@ async function baueSitzung($: EngineInterface, cfg: Konfig, now: number): Promis
     modelle: eigen.modelle,
     kosten: kosten === null ? null : Math.round(kosten * 10_000) / 10_000,
     kostenHeute: kostenHeute === null ? null : Math.round(kostenHeute * 10_000) / 10_000,
-    limits,
-    limitsZeit: limits.length > 0 ? (eigen.letzterSchritt ?? (typeof usage?.startedAt === 'number' ? usage.startedAt : null)) : null,
+    limits: eigen.limits,
+    limitsZeit: eigen.limits.length > 0 ? eigen.limitsZeit : null,
     letzteAntwort: eigen.letzteAntwort,
     zustand: zustandVon(eigen, now),
     zustandSeit: zustandSeitVon(eigen, now),
@@ -224,10 +250,24 @@ async function herzschlag($: EngineInterface, cfg: Konfig): Promise<LeitstandSit
     const now = await $.clock.now()
     const id = await $.session.id()
     const dir = await ordner($)
-    if (letzteId && letzteId !== id) zuletzt = null // nach /clear: neue Sitzung, neue Datei
+    if (letzteId && letzteId !== id) {
+      zuletzt = null // nach /clear: neue Sitzung, neue Datei
+      privatBereinigt = false
+      titelZeit = 0
+    }
     letzteId = id
     const s = await baueSitzung($, cfg, now)
-    if (!s || !dir) return s
+    if (!s) {
+      // Privat (auch weil der Titel erst nach dem ersten Prompt ein Ausblenden-Wort nannte): eine früher geschriebene Datei verschwindet.
+      if (!privatBereinigt && dir) {
+        privatBereinigt = true
+        zuletzt = null
+        await entfernen($, [`${dir}/${dateiName(id)}`])
+      }
+      return null
+    }
+    privatBereinigt = false
+    if (!dir) return s
     const { herz: _herz, ...ohneHerz } = s
     const json = JSON.stringify(ohneHerz)
     if (brauchtSchreiben(zuletzt, json, now)) {
@@ -240,7 +280,10 @@ async function herzschlag($: EngineInterface, cfg: Konfig): Promise<LeitstandSit
   }
 }
 
-/** Alle Dateien von heute lesen (laufende und beendete); ältere räumt der Leser weg. Jeder Fehler heißt nur „keine Daten". */
+/**
+ * Alle Dateien von heute lesen (laufende und beendete); ältere räumt der Leser weg. Jeder Fehler heißt nur „keine Daten".
+ * Dateien ohne Format 2 (Mod 0.1) werden nie angezeigt oder gerechnet und gelöscht, sobald ihr Herzschlag über 10 min alt ist.
+ */
 async function lesen($: EngineInterface, eigene: LeitstandSitzung | null, now: number): Promise<LeitstandSitzung[]> {
   const ergebnis = new Map<string, LeitstandSitzung>()
   try {
@@ -259,19 +302,33 @@ async function lesen($: EngineInterface, eigene: LeitstandSitzung | null, now: n
         }
         gesehen.add(f.name)
         const alt = gemerkt.get(f.name)
+        const pruefeAlt = (g: { s: LeitstandSitzung | null; altHerz?: number }) => {
+          if (g.s) ergebnis.set(g.s.sessionId, g.s)
+          else if (g.altHerz !== undefined && now - g.altHerz > ALT_LOESCH_MS) {
+            weg.push(`${dir}/${f.name}`)
+            gemerkt.delete(f.name)
+          }
+        }
         if (alt && alt.mtime === f.mtimeMs) {
-          ergebnis.set(alt.s.sessionId, alt.s)
+          pruefeAlt(alt)
           continue
         }
         try {
-          const s = pruefeSitzung(JSON.parse(await $.fs.read(`${dir}/${f.name}`)))
-          if (s && s.herz >= heute0 - 1) {
-            gemerkt.set(f.name, { mtime: f.mtimeMs, s })
-            ergebnis.set(s.sessionId, s)
+          const roh: unknown = JSON.parse(await $.fs.read(`${dir}/${f.name}`))
+          const s = pruefeSitzung(roh)
+          if (s) {
+            if (s.herz >= heute0 - 1) {
+              gemerkt.set(f.name, { mtime: f.mtimeMs, s })
+              ergebnis.set(s.sessionId, s)
+            }
+          } else {
+            const neu = { mtime: f.mtimeMs, s: null, altHerz: alteDateiHerz(roh) ?? undefined }
+            gemerkt.set(f.name, neu)
+            pruefeAlt(neu)
           }
         } catch {
           // halb geschriebene Datei: der letzte gute Stand bleibt
-          if (alt) ergebnis.set(alt.s.sessionId, alt.s)
+          if (alt?.s) ergebnis.set(alt.s.sessionId, alt.s)
         }
       }
       for (const k of [...gemerkt.keys()]) if (!gesehen.has(k)) gemerkt.delete(k)
@@ -331,6 +388,36 @@ async function agentAendern($: EngineInterface, id: string, fn: (a: LeitstandAge
   await update($, eigenA, s => (s.agents[id] ? { ...s, agents: { ...s.agents, [id]: fn(s.agents[id]!) } } : s))
 }
 
+// ---- Titel der Sitzung ---------------------------------------------------------------------------
+// Der Host nennt den Titel nur in den classic-Ereignissen `UserPromptSubmit` und `SessionStart` (`session_title`). Beide beantwortet das
+// eingebaute Plugin „cc-plugin-sec-default" zuerst und reicht sie nicht weiter: ein Mod-Hook darauf läuft nie (Debug-Log: „classic.… bypassed")
+// und erzeugte nur eine Zeile „hook was skipped" im Verlauf. Darum liest die Mod den Titel dort, wo der Host ihn ablegt: die Datensätze
+// `aiTitle` (vom Modell vergebener Titel) und `customTitle` (/rename) im Transcript der Sitzung. Gelesen wird nur dieser eine Wert (grep),
+// nie ein Prompt oder eine Antwort.
+
+/** Wie oft nach einem (geänderten) Titel gesucht wird. */
+const TITEL_ABFRAGE_MS = 20_000
+let titelZeit = 0
+
+async function titelAbfragen($: EngineInterface, id: string, now: number) {
+  if (now - titelZeit < TITEL_ABFRAGE_MS) return
+  titelZeit = now
+  const konfig = ((await $.env.get('CLAUDE_CONFIG_DIR')) ?? '').replace(/\/$/, '') || `${(await homeDir($)) ?? ''}/.claude`
+  const ordnerNamen = new Set<string>()
+  for (const wurzel of [await $.session.root().catch(() => ''), await $.session.cwd().catch(() => '')]) if (wurzel) ordnerNamen.add(projektOrdner(wurzel))
+  for (const ordnerName of ordnerNamen) {
+    const r = await $.process
+      .run(['grep', '-a', '-o', '-E', '"(customTitle|aiTitle)":"([^"\\\\]|\\\\.)*"', `${konfig}/projects/${ordnerName}/${id.replace(/[^A-Za-z0-9_-]/g, '_')}.jsonl`], { timeoutMs: 8000 })
+      .catch(() => null)
+    if (!r || r.exitCode !== 0) continue
+    const t = titelAusTreffern(r.stdout)
+    if (t) {
+      await update($, eigenA, s => (s.titel === t ? s : { ...s, titel: t }))
+      return
+    }
+  }
+}
+
 // ---- Takt und Animation ------------------------------------------------------------------------------
 
 async function takt($: EngineInterface, cfg: Konfig) {
@@ -352,17 +439,18 @@ async function takt($: EngineInterface, cfg: Konfig) {
   }
 }
 
-/** Ein Bild der Animation: nur der Crew-Streifen wird neu berechnet und per `blit` gemalt, und nur, wenn er sich geändert hat. */
+/** Ein Bild der Animation: nur die Crew-Streifen werden neu berechnet und per `blit` gemalt, und nur, was sich geändert hat. */
 async function bild($: EngineInterface) {
   try {
-    const b = letztesBild
-    if (!b) return
+    if (letzteBilder.length === 0) return
     const now = await $.clock.now()
-    const z = crewZellen(b.figuren, b.spalten, Math.floor(now / BILD_MS), now, BILD_MS)
-    const cells = z.kodiere()
-    if (cells === letzteZellen) return
-    const r = await $.ui.blit({ requestId: PANE, key: 'crew', cells, columns: z.spalten, rows: z.zeilen })
-    if (!r.deny) letzteZellen = cells
+    for (const b of letzteBilder) {
+      const z = crewZellen(b.figuren, b.spalten, Math.floor(now / BILD_MS), now, BILD_MS)
+      const cells = z.kodiere()
+      if (letzteZellen.get(b.key) === cells) continue
+      const r = await $.ui.blit({ requestId: PANE, key: b.key, cells, columns: z.spalten, rows: z.zeilen })
+      if (!r.deny) letzteZellen.set(b.key, cells)
+    }
   } catch {
     // nie stören
   }
@@ -373,8 +461,8 @@ function bildStarten($: EngineInterface, offen: boolean) {
   if (!offen) {
     if (bildTimer) bildTimer.cancel()
     bildTimer = null
-    letztesBild = null
-    letzteZellen = ''
+    letzteBilder = []
+    letzteZellen.clear()
     return
   }
   if (bildTimer) return
@@ -524,7 +612,7 @@ export const register: Register = (on, options) => {
         if (bildTimer) bildTimer.cancel()
         taktTimer = null
         bildTimer = null
-        letztesBild = null
+        letzteBilder = []
       }
       // Die Datei bleibt liegen, mit Endzeit: beendete Sitzungen zählen in „heute".
       const now = await $.clock.now()
@@ -704,8 +792,8 @@ export const register: Register = (on, options) => {
       raster: Raster !== null,
       bildMs: BILD_MS,
     })
-    letztesBild = a.crew ? { figuren: a.crew.figuren, spalten: a.crew.spalten } : null
-    letzteZellen = ''
+    letzteBilder = a.crew
+    letzteZellen.clear()
 
     const textRuns = (key: string, segs: Seg[]) =>
       verschmelzen(segs).map((s, i) => (
@@ -754,7 +842,7 @@ export const register: Register = (on, options) => {
           return (
             <Box key={z.key} flexDirection="row">
               <Box flexDirection="column">{z.links.map((l, j) => zeileText(`${key}l${j}`, l))}</Box>
-              {rasterEl(`${z.key}-raster`, z.raster)}
+              {rasterEl(z.rasterKey ?? `${z.key}-raster`, z.raster)}
               <Box flexDirection="column">{z.rechts.map((r, j) => zeileText(`${key}r${j}`, r))}</Box>
             </Box>
           )

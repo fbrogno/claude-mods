@@ -1,7 +1,7 @@
 {
   "name": "leitstand",
-  "version": "0.2.1",
-  "description": "Leitstand: Live-Dashboard für alle Claude-Code-Sitzungen mit gemessenen Token-Zahlen, Kosten, Cache-Trefferquote, Limits und Subagents als animierte Pixel-Männchen.",
+  "version": "0.3.0",
+  "description": "Leitstand: Live-Dashboard für alle Claude-Code-Sitzungen: Titel statt Kürzel, leere Sitzungen gebündelt, kontoweite Limits, Crew-Übersicht je Sitzung mit gemessenen Token-Zahlen, Kosten und Cache-Trefferquote; Subagents als animierte Pixel-Männchen.",
   "author": {
     "name": "Fabio Brogno"
   },
