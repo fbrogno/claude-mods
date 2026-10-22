@@ -1,0 +1,22 @@
+{
+  "name": "leitstand",
+  "version": "0.1.2",
+  "description": "Leitstand: Live-Seitenpanel mit allen laufenden Claude-Code-Sitzungen und ihren Subagents, dargestellt als animierte Pixel-Claude-Männchen.",
+  "author": {
+    "name": "Fabio Brogno"
+  },
+  "keywords": [
+    "mods",
+    "agents",
+    "pane"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "ausblenden": {
+      "type": "string",
+      "title": "Privates ausblenden",
+      "description": "Kommagetrennte Wörter. Nennt der Arbeitsordner eines davon (Groß/klein egal), schreibt die Sitzung keine Datei und taucht im Leitstand nicht auf. Zusätzlich gilt die lokale Datei ~/.claude-leitstand/ausblenden.txt.",
+      "default": ""
+    }
+  }
+}

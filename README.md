@@ -15,6 +15,7 @@ claude plugin marketplace add fbrogno/claude-mods
 claude plugin install agent-radar@claude-mods
 claude plugin install brain-mods@claude-mods
 claude plugin install wachhalter@claude-mods
+claude plugin install leitstand@claude-mods
 ```
 
 Danach Claude Code neu starten. Einstellungen je Mod findest du im Konfigurationsmenü (`/config`).
@@ -99,6 +100,16 @@ Drei Helfer, die keine Tokens kosten und nur lokal arbeiten.
 - `/wach`: wie lange noch
 
 Solange der Mac wach gehalten wird, steht die Restzeit in der Statuszeile.
+
+### leitstand
+
+`/leitstand` öffnet ein Seitenpanel neben dem Chat: alle laufenden Claude-Code-Sitzungen (auch über mehrere Profile/Konfig-Ordner hinweg) mit ihren Subagents, jede Figur ein animiertes Pixel-Claude mit eigenem Hut. Farbe = Modell (haiku grün, sonnet blau, opus violett), Bewegung = Zustand (arbeitet, wartet, fertig, Fehler).
+
+- je Sitzung: Projekt, Modell, Kontext-%, Cache warm/kalt, Kosten
+- je Agent: aktuelles Werkzeug und Ziel (gekürzt, nie Befehlsinhalte), Laufzeit, Tokens
+- Knöpfe: Nachricht schicken, Stopp (zweiter Klick bestätigt)
+- Jede Sitzung schreibt ihren Stand nach `~/.claude-leitstand/sitzungen/`; damit eine Sitzung erscheint, muss die Mod dort installiert sein.
+- Ausblenden: Wörter in `/config` (`ausblenden`) oder je Zeile in `~/.claude-leitstand/ausblenden.txt` — nennt der Arbeitsordner eines davon, wird nichts geschrieben.
 
 ## Empfohlene Einstellungen dazu
 

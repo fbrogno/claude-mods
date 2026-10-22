@@ -21,6 +21,11 @@
       "name": "wachhalter",
       "source": "./plugins/wachhalter",
       "description": "/wach hält den Mac per caffeinate wach — ohne Modellaufruf, ohne Tokens."
+    },
+    {
+      "name": "leitstand",
+      "source": "./plugins/leitstand",
+      "description": "Live-Seitenpanel: alle laufenden Sitzungen und Subagents als animierte Pixel-Claude-Männchen, mit Werkzeug, Modell, Kontext und Kosten."
     }
   ]
 }
