@@ -30,6 +30,23 @@ export type SitzungsStand = {
   herz: number
 }
 
+/** Keepwarm einer Sitzung: Frist und Zähler liegen im Zustand, damit ein Neuladen sie nicht verliert. */
+export type KeepwarmStand = {
+  /** Ende der Frist (ms seit Epoche). */
+  frist: number
+  aktiv: boolean
+  /** Nichts zu forken: der Takt beginnt mit der nächsten Antwort. */
+  wartet: boolean
+  /** Laufende Wiederholung (0 = keine). */
+  wiederholung: number
+  pings: number
+  /** Summe der Ping-Kosten in $ (Listenpreise). */
+  kosten: number
+  /** Warum Keepwarm beendet wurde; null, solange es läuft. */
+  grund: string | null
+  beendetAm: number | null
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'agent-radar': {
@@ -39,6 +56,7 @@ declare module 'claude-code' {
       sitzungen: SitzungsStand[]
       eigeneId: string
       kontextTokens: number | null
+      keepwarm: KeepwarmStand | null
     }
   }
 }

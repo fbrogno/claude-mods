@@ -52,6 +52,14 @@ Alle Claude-Code-Sitzungen und Subagents auf einen Blick, plus Wächter gegen di
 - **Pausen-Hinweis:** Kurz bevor der Cache abläuft, zeigt das Band bei großem Kontext die Kosten des Neuaufbaus und
   einen Knopf „Stand sichern“ (startet `/handoff`, falls vorhanden). Danach `/clear`, und nach der Pause geht es billig
   weiter.
+- **Keepwarm:** `/keepwarm 2h` (auch `45m`, `1h30m`) hält den Prompt-Cache in einer Pause warm: Kurz bevor er abläuft
+  (`cache_minuten` − 10 min, also nach 50 min Leerlauf), schickt der Mod einen Mini-Ping per Fork über den Verlauf. Der
+  nächste echte Prompt liest den Cache dann nur, statt ihn teuer neu zu schreiben. `/keepwarm aus` beendet, `/keepwarm`
+  allein zeigt den Stand. Das Band zeigt eine Zeile („Keepwarm: noch 1 h 20 min · Ping in 32 min · 2 Pings ≈ 0,62 $“).
+  Es endet von selbst bei Fristende, kaltem Ping, `/clear`, Kompaktierung oder Sitzungsende; bei 429/5xx gibt es bis zu
+  3 Wiederholungen mit Wartezeit, solange sie vor Cache-Ablauf landen. Gilt nur für die laufende Sitzung.
+  Herkunft: Ansatz und Ping-Logik nach [cache-tax](https://github.com/karanb192/cache-tax) von Karan Bansal (MIT-Lizenz),
+  für agent-radar angepasst und gekürzt.
 - **Modellwahl-Pflicht:** `general-purpose`-Subagents ohne Modellangabe werden abgelehnt, mit der Bitte, bewusst zu
   wählen: haiku (suchen, sichten, prüfen), sonnet (umsetzen nach Plan, Tests) oder opus (Architektur, Reviews).
   Forks, Teammates und Plugin-Agents mit eigenem Modell sind ausgenommen.
@@ -65,6 +73,7 @@ Alle Claude-Code-Sitzungen und Subagents auf einen Blick, plus Wächter gegen di
 | `explore_auf_haiku` | `true` | Explore-Agents ohne Modellangabe auf Haiku |
 | `cache_minuten` | `60` | Lebensdauer des Prompt-Caches nach der letzten Antwort |
 | `cache_warnung_minuten` | `10` | Ab dieser Restzeit erscheint der Pausen-Hinweis |
+| `keepwarm_max_stunden` | `4` | Längste Frist für `/keepwarm`; mehr wird auf diesen Wert gesetzt |
 
 Die Dollarbeträge sind API-Listenpreise. Bei einem Abo sind sie ein Maß für den Limit-Verbrauch, kein Rechnungsbetrag.
 
