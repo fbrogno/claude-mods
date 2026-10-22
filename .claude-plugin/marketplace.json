@@ -25,7 +25,7 @@
     {
       "name": "leitstand",
       "source": "./plugins/leitstand",
-      "description": "Live-Seitenpanel: alle laufenden Sitzungen und Subagents als animierte Pixel-Claude-Männchen, mit Werkzeug, Modell, Kontext und Kosten."
+      "description": "Dashboard im Seitenpanel: Kosten, Tokens, Limits, alle Sitzungen und Subagents als animierte Pixel-Claude-Männchen."
     }
   ]
 }

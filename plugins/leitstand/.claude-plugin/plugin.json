@@ -1,7 +1,7 @@
 {
   "name": "leitstand",
-  "version": "0.1.2",
-  "description": "Leitstand: Live-Seitenpanel mit allen laufenden Claude-Code-Sitzungen und ihren Subagents, dargestellt als animierte Pixel-Claude-Männchen.",
+  "version": "0.2.0",
+  "description": "Leitstand: Live-Dashboard für alle Claude-Code-Sitzungen mit gemessenen Token-Zahlen, Kosten, Cache-Trefferquote, Limits und Subagents als animierte Pixel-Männchen.",
   "author": {
     "name": "Fabio Brogno"
   },

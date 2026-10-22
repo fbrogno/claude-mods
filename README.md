@@ -103,12 +103,14 @@ Solange der Mac wach gehalten wird, steht die Restzeit in der Statuszeile.
 
 ### leitstand
 
-`/leitstand` öffnet ein Seitenpanel neben dem Chat: alle laufenden Claude-Code-Sitzungen (auch über mehrere Profile/Konfig-Ordner hinweg) mit ihren Subagents, jede Figur ein animiertes Pixel-Claude mit eigenem Hut. Farbe = Modell (haiku grün, sonnet blau, opus violett), Bewegung = Zustand (arbeitet, wartet, fertig, Fehler).
+`/leitstand` öffnet ein Dashboard im Seitenpanel (Vollbild-Layout, ab 110 Spalten angedockt): alle Claude-Code-Sitzungen des Tages — auch über mehrere Konfig-Ordner hinweg — mit Kosten, Tokens, Limits und ihren Subagents als animierte Pixel-Claude-Männchen.
 
-- je Sitzung: Projekt, Modell, Kontext-%, Cache warm/kalt, Kosten
-- je Agent: aktuelles Werkzeug und Ziel (gekürzt, nie Befehlsinhalte), Laufzeit, Tokens
-- Knöpfe: Nachricht schicken, Stopp (zweiter Klick bestätigt)
-- Jede Sitzung schreibt ihren Stand nach `~/.claude-leitstand/sitzungen/`; damit eine Sitzung erscheint, muss die Mod dort installiert sein.
+- Kopf und Kacheln: aktive Sitzungen, laufende Agents, Kosten heute; Anfragen · Eingabe · Cache lesen · Ausgabe, Cache-Trefferquote als Balken und Ring
+- gemessen aus jeder Modell-Anfrage (`turn.step`) und `/cost`; Geschätztes steht mit „≈“ (Cache-Ersparnis), Kosten je Modell gibt es nicht (nur Token-Anteile)
+- Limits (5 h / 7 T) mit Reset-Zeit, wenn das Konto sie meldet
+- Sitzungen wählbar (Klick oder Tab+Enter); Crew je Sitzung: Figur je Agent (Hut je Agent, Farbe = Modell, Bewegung = Zustand: arbeitet, wartet, braucht dich, fertig, Fehler, ruht), Werkzeug + Ziel (gekürzt, nie Befehlsinhalte), Laufzeit, Anfragen, Tokens; Knöpfe Nachricht und Stopp
+- Modelle: Anfragen und Tokens ↑↓ je Modell
+- Jede Sitzung schreibt ihren Stand nach `~/.claude-leitstand/sitzungen/`; eine Sitzung erscheint nur, wenn die Mod dort installiert ist.
 - Ausblenden: Wörter in `/config` (`ausblenden`) oder je Zeile in `~/.claude-leitstand/ausblenden.txt` — nennt der Arbeitsordner eines davon, wird nichts geschrieben.
 
 ## Empfohlene Einstellungen dazu
